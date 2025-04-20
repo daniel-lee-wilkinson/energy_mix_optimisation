@@ -202,7 +202,13 @@ def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
     
     # Apply solar panel efficiency and temperature corrections for daytime
     pv_efficiency = 0.15
-    temp_effect = 1 - 0.004 * 30  # Typical temperature effect for Moomba
+    stc_temp = 25  # Standard Test Condition temperature in °C
+    temp_coefficient = -0.004  # -0.4% per degree Celsius
+
+    # Calculate temperature effect dynamically based on weather_data['temperature']
+    # Note: Ensure 'temperature' column exists before this calculation. 
+    # The code below already adds synthetic temperature if it's missing.
+    temp_effect = 1 + (weather_data['temperature'] - stc_temp) * temp_coefficient
     
     # Initialize PV generation
     weather_data['pv_generation'] = (
@@ -211,6 +217,9 @@ def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
         pv_capacity * 
         temp_effect / 1000  # Convert to kWh
     )
+
+    # Ensure generation is non-negative after temperature correction
+    weather_data['pv_generation'] = weather_data['pv_generation'].clip(lower=0)
     
     # Ensure zero generation at night
     weather_data.loc[night_mask, 'pv_generation'] = 0
@@ -648,7 +657,7 @@ def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
     
     # Emission factors (kg CO2e/kWh)
     emission_factors = {
-        'grid': 0.85,  # Example grid emission factor for Australia
+        'grid': 0.65,  # Updated grid emission factor
         'pv': 0.041,   # Typical PV emission factor
         'wind': 0.011  # Typical wind emission factor
     }
@@ -885,17 +894,44 @@ def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
 
     # Plot monthly energy mix
     plt.figure(figsize=(14, 8))
-    monthly_summary['grid_required'].plot(kind='bar', stacked=True, color='blue', alpha=0.7, label='Grid')
-    monthly_summary['wind_generation'].plot(kind='bar', stacked=True, color='green', alpha=0.7, label='Wind')
-    monthly_summary['pv_generation'].plot(kind='bar', stacked=True, color='orange', alpha=0.7, label='PV')
-    monthly_summary['demand'].plot(kind='line', color='red', marker='o', linewidth=2, label='Demand')
+    
+    # Define colors to match previous plots and common conventions
+    colors = {'pv_generation': 'orange', 'wind_generation': 'green', 'grid_required': 'blue'}
+    
+    # Plot the stacked bar chart first using the DataFrame plot method
+    # This generally ensures stack order matches legend order (bottom to top)
+    ax = monthly_summary[['pv_generation', 'wind_generation', 'grid_required']].plot(
+        kind='bar', 
+        stacked=True, 
+        color=[colors['pv_generation'], colors['wind_generation'], colors['grid_required']], 
+        alpha=0.7,
+        figsize=(14, 8) # Specify figsize here for the DataFrame plot
+    )
+    
+    # Plot the demand line on the same axes (ax)
+    monthly_summary['demand'].plot(
+        kind='line', 
+        color='red', 
+        marker='o', 
+        linewidth=2, 
+        label='Demand',
+        ax=ax # Ensure it plots on the same axes
+    )
     
     plt.title('Monthly Energy Generation by Source')
     plt.xlabel('Month')
     plt.ylabel('Energy (kWh)')
-    plt.legend()
-    plt.xticks(range(12), ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
     
+    # Improve legend placement
+    plt.legend(loc='upper left', bbox_to_anchor=(1, 1)) # Place legend outside plot area
+    
+    # Set x-ticks (adjust index based on filtered months if necessary)
+    month_indices = monthly_summary.index.tolist()
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    plt.xticks(ticks=range(len(month_indices)), labels=[month_names[i-1] for i in month_indices], rotation=0) # Use filtered indices
+    
+    plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust layout to make space for the legend
+
     # Save with timestamped filename
     timestamped_filename = get_timestamped_filename('monthly_energy_mix.png')
     plt.savefig(os.path.join('figures', timestamped_filename))
@@ -1076,6 +1112,7 @@ def main():
     os.makedirs(figures_old_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(data_old_dir, exist_ok=True)
+    os.makedirs(monthly_profiles_dir, exist_ok=True) # Need this for plots
     os.makedirs(monthly_profiles_old_dir, exist_ok=True) # Create nested old dir
 
     # Archive figures/*.png
