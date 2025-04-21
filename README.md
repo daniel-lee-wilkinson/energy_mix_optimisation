@@ -127,8 +127,8 @@ It provides a different, high-level perspective based purely on annual averages 
 
 ## Input/Output Data Structure
 
-(Refer to previous descriptions - structure remains largely the same, `optimal_supply_profile.csv` now includes battery columns: `battery_soc`, `battery_charge`, `battery_discharge`, `curtailment`).
+Refer to previous descriptions.
 
 ## Plotting
 
-(Refer to previous descriptions - filenames are now fixed, `optimal_system_profiles.png` is added).
+Refer to previous descriptions.
