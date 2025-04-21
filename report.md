@@ -1,4 +1,4 @@
-print(default_api.edit_file(target_file='report.md', instructions='Remove all references to specific locations (Moomba, Coober Pedy) and their coordinates. Replace with general references to remote locations in central Australia without any naming system that could be mapped back to original locations.', code_edit='''# Energy Mix Optimisation Project Report
+# Energy Mix Optimisation Project Report
 
 ## Executive Summary
 
@@ -138,5 +138,3 @@ The results highlight the critical interplay between GWP factors, technology lan
 *   **Optimisation Algorithm:** Investigate more advanced optimisation techniques.
 *   **Sensitivity & Uncertainty Analysis:** Assess the impact of varying key inputs (land availability, demand, battery size, GWP factors, capacity factors) on the optimal solution, potentially using Monte Carlo methods.
 *   **Spatial Variability:** Compare results across different remote Australian locations to assess the influence of different climate regimes and resource availability on the optimal mix.
-''')
-)
