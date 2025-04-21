@@ -34,9 +34,13 @@ Output files (figures and data) are saved with fixed names in their respective d
 
 ## Setup
 
-1. Create a Python virtual environment
-2. Install the dependencies: `pip install -r requirements_YYYYMMDD_HHMMSS.txt`
-3. Run the optimization script: `python src/energy_mix_optimization_YYYYMMDD_HHMMSS.py`
+1. Create a Python virtual environment (recommended).
+2. Install the dependencies: `pip install -r requirements.txt`
+3. Run the optimization script:
+   ```bash
+   python run_optimization.py
+   ```
+   *Note:* This command executes the `run_optimization.py` script, which automatically finds and runs the most recent `energy_mix_optimization_*.py` file located in the `src/` directory. This ensures you are always using the latest version of the core logic. If you need to run a specific older version, you can execute its corresponding `src/energy_mix_optimization_YYYYMMDD_HHMMSS.py` file directly.
 
 ## Features
 
