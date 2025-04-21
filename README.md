@@ -48,7 +48,7 @@ Output files (figures and data) are saved with fixed names in their respective d
 - Calculates optimal energy mix to minimise global warming potential
 - Analyses temperature effects on energy demand
 - Optimises land use for PV and wind installations
-- Creates visualisations of energy generation profiles and optimisation results 
+- Creates visualisations of energy generation profiles and optimisation results
 
 ## Data Sources
 
@@ -123,7 +123,7 @@ The script generates CSV data files and PNG image files.
 **Figure Files (in `figures/`):**
 *   `generation_profiles.png`: Time series plots of potential PV generation, potential Wind generation, and Temperature.
 *   `monthly_energy_mix.png`: Stacked bar chart showing the contribution of PV, Wind, and Grid to meet monthly demand for the optimal mix.
-*   `optimal_energy_mix.png`: Pie chart visualizing the percentage share of PV, Wind, and Grid in the final optimal annual energy mix.
-*   `temperature_analysis.png`: Multi-panel plot analyzing temperature distribution and its impact on demand and the energy mix.
+*   `optimal_energy_mix.png`: Pie chart visualising the percentage share of PV, Wind, and Grid in the final optimal annual energy mix.
+*   `temperature_analysis.png`: Multi-panel plot analysing temperature distribution and its impact on demand and the energy mix.
 *   `gwp_by_temperature.png`: Bar chart showing the average GWP per kWh across different temperature ranges for the optimal mix.
-*   `figures/monthly_first_week_profiles/hourly_supply_profile_month_MM.png`: Plots visualizing the hourly supply (PV, Wind, Grid) vs. demand for the first week of each month for the optimal mix (where MM is the month number).
+*   `figures/monthly_first_week_profiles/hourly_supply_profile_month_MM.png`: Plots visualising the hourly supply (PV, Wind, Grid) vs. demand for the first week of each month for the optimal mix (where MM is the month number).

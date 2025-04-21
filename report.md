@@ -1,16 +1,16 @@
-# Energy Mix Optimization Project Report
+# Energy Mix Optimisation Project Report
 
 ## 1. Project Goal
 
-The primary goal of this project is to determine an optimal mix of photovoltaic (PV) solar power, wind power, and grid electricity supply to meet a specified annual energy demand for a given location (given the example of Moomba, South Australia). The optimization aims to minimize the overall Global Warming Potential (GWP) associated with the energy generation mix, subject to a constraint on the total available land area for PV and wind installations.
+The primary goal of this project is to determine an optimal mix of photovoltaic (PV) solar power, wind power, and grid electricity supply to meet a specified annual energy demand for a given location (given the example of Moomba, South Australia). The optimisation aims to minimize the overall Global Warming Potential (GWP) associated with the energy generation mix, subject to a constraint on the total available land area for PV and wind installations.
 
 ## 2. Key Questions Addressed
 
 This analysis seeks to answer the following questions:
 
-*   What is the optimal installed capacity (in MW) for PV and Wind energy required to meet the target annual demand while minimizing GWP, given the available land?
-*   How much land (in km²) is utilized by the optimal PV and Wind installations?
-*   What is the resulting minimum GWP (in kg CO2e/kWh) for the optimized energy mix?
+*   What is the optimal installed capacity (in MW) for PV and Wind energy required to meet the target annual demand while minimising GWP, given the available land?
+*   How much land (in km²) is utilised by the optimal PV and Wind installations?
+*   What is the resulting minimum GWP (in kg CO2e/kWh) for the optimised energy mix?
 *   What is the percentage contribution of PV, Wind, and the Grid to the total annual energy supply in the optimal scenario?
 *   How does the energy supply from renewables and the required grid backup vary on an hourly and monthly basis?
 *   How frequently does the renewable generation fall short of meeting the hourly demand (requiring grid intervention)?
@@ -22,8 +22,8 @@ This analysis seeks to answer the following questions:
 
 *   **Primary Weather Data:** Hourly weather data is preferentially sourced from the NASA POWER (Prediction Of Worldwide Energy Resource) API. The key parameters fetched are:
     *   `ALLSKY_SFC_SW_DWN`: All Sky Insolation Incident on a Horizontal Surface (W/m²) - Used for PV calculation.
-    *   `WS2M`: Wind Speed at 2 Meters (m/s) - Used for Wind calculation.
-    *   `T2M`: Temperature at 2 Meters (°C) - Used for PV efficiency correction and demand modeling.
+    *   `WS2M`: Wind Speed at 2 Metres (m/s) - Used for Wind calculation.
+    *   `T2M`: Temperature at 2 Metres (°C) - Used for PV efficiency correction and demand modelling.
 *   **Location:** The primary target location is Moomba, South Australia (-28.1083 S, 140.2028 E). If data acquisition fails for Moomba, the script attempts to fetch data for Coober Pedy, South Australia (-29.0139 S, 134.7544 E) as a fallback.
 *   **Synthetic Data:** If real data cannot be obtained from NASA POWER for either location, the script generates synthetic hourly weather data based on typical patterns and the Moomba coordinates as a final fallback.
 *   **Time Period:** The analysis is typically run for a full year (e.g., 2023-01-01 to 2023-12-31) to capture seasonal variations.
@@ -34,18 +34,18 @@ This analysis seeks to answer the following questions:
     *   Relevant columns (`solar_irradiation`, `wind_speed`, `temperature`) are converted to numeric types.
     *   NASA's missing data indicator (`-999.0`) is replaced with `NaN`.
     *   Any hourly record containing `NaN` in the key weather columns is removed.
-*   **PV Generation Modeling:**
+*   **PV Generation Modelling:**
     *   Solar position (elevation, azimuth) is calculated based on time and location.
     *   Potential PV generation per MW is calculated based on solar irradiation, a fixed panel efficiency (15%), and a temperature correction factor (derating by 0.4% per °C above 25°C STC). Generation is set to zero when solar elevation is non-positive (night).
-*   **Wind Generation Modeling:**
+*   **Wind Generation Modelling:**
     *   Potential wind generation per MW is calculated using a standard power curve based on wind speed, considering cut-in (3 m/s), rated (12 m/s), and cut-out (25 m/s) speeds. A cubic relationship models power between cut-in and rated speeds.
-*   **Demand Modeling:**
+*   **Demand Modelling:**
     *   A base hourly demand is derived from a specified total annual demand (default: 40 MWh/year).
     *   This base demand is adjusted for temperature: demand is increased by 20% during hours when the temperature exceeds 30°C.
 
-### 3.3. Optimization
+### 3.3. Optimisation
 
-*   **Objective:** Minimize the total weighted GWP of the energy mix (PV + Wind + Grid).
+*   **Objective:** Minimise the total weighted GWP of the energy mix (PV + Wind + Grid).
 *   **Emission Factors (Assumed):**
     *   PV: 0.041 kg CO2e/kWh
     *   Wind: 0.011 kg CO2e/kWh
@@ -67,7 +67,7 @@ This analysis seeks to answer the following questions:
 *   **Data Files:** Generates CSV files containing:
     *   Processed weather data and *potential* generation per MW (`australian_energy_data_*.csv`).
     *   Hourly supply profile (PV, Wind, Grid, Demand) for the *optimal* mix (`optimal_supply_profile_*.csv`).
-*   **Visualizations:** Creates PNG plots illustrating key findings and trends. These include:
+*   **Visualisations:** Creates PNG plots illustrating key findings and trends. These include:
     *   Raw generation potential and temperature profiles (`generation_profiles_*.png`).
        ![Generation Profiles](figures/generation_profiles.png "Generation Profiles")
       
@@ -91,19 +91,19 @@ This analysis seeks to answer the following questions:
 
 *(Note: Specific numerical results depend on the exact input parameters and weather data used. Replace example text and filenames with actual results from your run.)*
 
-*   **Optimal Capacities:** The optimization determined that X MW of PV capacity and Y MW of Wind capacity provide the lowest GWP mix while meeting demand and land constraints.
+*   **Optimal Capacities:** The optimisation determined that X MW of PV capacity and Y MW of Wind capacity provide the lowest GWP mix while meeting demand and land constraints.
 *   **Land Use:** The optimal PV installation requires X * 0.02 km² and the Wind installation requires Y * 0.4 km², resulting in a total land usage of Z km², which is within the 50 km² available limit.
 *   **Energy Mix:** The resulting annual energy supply is composed of approximately 45% PV, 35% Wind, and 20% Grid contribution. *(See Figure: `optimal_energy_mix_YYYYMMDD_HHMMSS.png` for the visual breakdown)*.
-*   **GWP:** The minimized GWP for this optimal mix is calculated as 0.15 kg CO2e/kWh. The variation of GWP based on ambient temperature (due to changing demand and grid reliance) is shown in *(Figure: `gwp_by_temperature_YYYYMMDD_HHMMSS.png`)*.
-*   **Stability & Grid Reliance:** The analysis indicates that grid power is required to meet demand during approximately 30% of the hours in the year. The monthly contribution of the grid is visualized in *(Figure: `monthly_energy_mix_YYYYMMDD_HHMMSS.png`)*. Hourly examples of grid supplementation can be seen in the weekly profile plots *(e.g., Figure: `figures/monthly_first_week_profiles/hourly_supply_profile_month_01_YYYYMMDD_HHMMSS.png`)*. The maximum calculated hourly energy deficit supplied by the grid was Z kWh.
+*   **GWP:** The minimised GWP for this optimal mix is calculated as 0.15 kg CO2e/kWh. The variation of GWP based on ambient temperature (due to changing demand and grid reliance) is shown in *(Figure: `gwp_by_temperature_YYYYMMDD_HHMMSS.png`)*.
+*   **Stability & Grid Reliance:** The analysis indicates that grid power is required to meet demand during approximately 30% of the hours in the year. The monthly contribution of the grid is visualised in *(Figure: `monthly_energy_mix_YYYYMMDD_HHMMSS.png`)*. Hourly examples of grid supplementation can be seen in the weekly profile plots *(e.g., Figure: `figures/monthly_first_week_profiles/hourly_supply_profile_month_01_YYYYMMDD_HHMMSS.png`)*. The maximum calculated hourly energy deficit supplied by the grid was Z kWh.
 *   **Visual Insights:** The generated figures provide further context. Seasonal trends in potential PV and Wind output alongside temperature are shown in *(Figure: `generation_profiles_YYYYMMDD_HHMMSS.png`)*. The impact of temperature on demand and the resulting energy mix strategy is detailed in the multi-panel *(Figure: `temperature_analysis_YYYYMMDD_HHMMSS.png`)*.
 
 ## 5. Outlook and Potential Improvements
 
 *   **Refine Assumptions:** Investigate more location-specific or technology-specific GWP factors, land use requirements, PV efficiency curves, and wind turbine power curves.
-*   **Energy Storage:** Incorporate modeling for battery energy storage systems (BESS) to reduce grid reliance and potentially improve GWP further.
-*   **Demand Modeling:** Implement more sophisticated demand models considering factors beyond just a single temperature threshold (e.g., humidity, time-of-day patterns, day-of-week).
-*   **Economic Analysis:** Integrate cost factors (CAPEX, OPEX) for PV, Wind, Grid, and potential storage to perform cost optimization or techno-economic analysis alongside GWP minimization.
-*   **Optimization Algorithm:** Explore alternative optimization techniques (e.g., linear programming, evolutionary algorithms) that might be more efficient or handle more complex constraints than the current grid search.
-*   **Sensitivity Analysis:** Systematically analyze how the optimal solution changes with variations in key input parameters like available land, annual demand, GWP factors, or component costs.
-*   **Higher Resolution Data:** Utilize sub-hourly weather data if available for more granular analysis.
+*   **Energy Storage:** Incorporate modelling for battery energy storage systems (BESS) to reduce grid reliance and potentially improve GWP further.
+*   **Demand Modelling:** Implement more sophisticated demand models considering factors beyond just a single temperature threshold (e.g., humidity, time-of-day patterns, day-of-week).
+*   **Economic Analysis:** Integrate cost factors (CAPEX, OPEX) for PV, Wind, Grid, and potential storage to perform cost optimisation or techno-economic analysis alongside GWP minimisation.
+*   **Optimisation Algorithm:** Explore alternative optimisation techniques (e.g., linear programming, evolutionary algorithms) that might be more efficient or handle more complex constraints than the current grid search.
+*   **Sensitivity Analysis:** Systematically analyse how the optimal solution changes with variations in key input parameters like available land, annual demand, GWP factors, or component costs.
+*   **Higher Resolution Data:** Utilise sub-hourly weather data if available for more granular analysis.
