@@ -127,23 +127,3 @@ The script generates CSV data files and PNG image files.
 *   `temperature_analysis.png`: Multi-panel plot analyzing temperature distribution and its impact on demand and the energy mix.
 *   `gwp_by_temperature.png`: Bar chart showing the average GWP per kWh across different temperature ranges for the optimal mix.
 *   `figures/monthly_first_week_profiles/hourly_supply_profile_month_MM.png`: Plots visualizing the hourly supply (PV, Wind, Grid) vs. demand for the first week of each month for the optimal mix (where MM is the month number).
-
-## Output Data Structure
-
-The script generates CSV data files and PNG image files.
-
-**Data Files (in `output_data/`):**
-*   `australian_energy_data.csv`:
-    *   Contains the processed hourly weather and *potential* generation data for the entire analysis period, *before* optimization.
-    *   Columns: `timestamp`, `solar_irradiation`, `wind_speed`, `temperature`, `pv_generation` (potential per MW), `wind_generation` (potential per MW), `total_generation` (potential PV+Wind), `month`, `hour`, `season`, `location`.
-*   `optimal_supply_profile.csv`:
-    *   Contains the hourly demand and generation profile for the *optimal* PV/Wind capacity mix determined by the `optimize_land_use` function.
-    *   Columns: `timestamp`, `pv_generation` (actual kWh for optimal capacity), `wind_generation` (actual kWh), `renewable_total`, `demand` (adjusted), `grid_required`, `temperature`, `temp_bin`, `temp_category`, `hourly_gwp`.
-
-**Figure Files (in `figures/`):**
-*   `generation_profiles.png`: Time series plots of potential PV generation, potential Wind generation, and Temperature.
-*   `monthly_energy_mix.png`: Stacked bar chart showing the contribution of PV, Wind, and Grid to meet monthly demand for the optimal mix.
-*   `optimal_energy_mix.png`: Pie chart visualizing the percentage share of PV, Wind, and Grid in the final optimal annual energy mix.
-*   `temperature_analysis.png`: Multi-panel plot analyzing temperature distribution and its impact on demand and the energy mix.
-*   `gwp_by_temperature.png`: Bar chart showing the average GWP per kWh across different temperature ranges for the optimal mix.
-*   `figures/monthly_first_week_profiles/hourly_supply_profile_month_MM.png`: Plots visualizing the hourly supply (PV, Wind, Grid) vs. demand for the first week of each month for the optimal mix (where MM is the month number). 
