@@ -13,7 +13,7 @@ from datetime import datetime
 def find_latest_script():
     """Find the latest optimisation script in the src directory"""
     # Get all optimisation scripts
-    scripts = glob.glob('src/energy_mix_optimisation_*.py')
+    scripts = glob.glob('src/energy_mix_optimization_*.py')
     
     if not scripts:
         print("Error: No optimisation scripts found in src directory")

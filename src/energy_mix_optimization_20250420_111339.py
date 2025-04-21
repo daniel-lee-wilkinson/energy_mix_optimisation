@@ -9,6 +9,7 @@ import pytz
 import math
 import requests
 from io import StringIO
+import traceback
 
 def calculate_solar_position(dates, latitude, longitude):
     """
@@ -180,7 +181,9 @@ def fetch_nasa_power_data(latitude, longitude, start_date, end_date):
 
 def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
     """
-    Process real weather data to calculate generation
+    Process real weather data to calculate generation potential per MW.
+    The pv_capacity and wind_capacity arguments are no longer used directly 
+    for calculating output columns but are kept for potential future use or compatibility.
     """
     # Calculate PV generation (kWh)
     # First ensure zero generation when sun is below horizon (elevation ≤ 0)
@@ -210,43 +213,47 @@ def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
     # The code below already adds synthetic temperature if it's missing.
     temp_effect = 1 + (weather_data['temperature'] - stc_temp) * temp_coefficient
     
-    # Initialize PV generation
-    weather_data['pv_generation'] = (
+    # --- Calculate PV Generation Potential per MW ---
+    weather_data['pv_potential_per_mw'] = (
         weather_data['solar_irradiation'] * 
         pv_efficiency * 
-        pv_capacity * 
-        temp_effect / 1000  # Convert to kWh
+        1 *  # Calculate for 1 MW capacity
+        temp_effect / 1000  # Convert W to kW (potential kWh per hour)
     )
 
-    # Ensure generation is non-negative after temperature correction
-    weather_data['pv_generation'] = weather_data['pv_generation'].clip(lower=0)
+    # Ensure generation potential is non-negative after temperature correction
+    weather_data['pv_potential_per_mw'] = weather_data['pv_potential_per_mw'].clip(lower=0)
     
-    # Ensure zero generation at night
-    weather_data.loc[night_mask, 'pv_generation'] = 0
+    # Ensure zero potential at night
+    weather_data.loc[night_mask, 'pv_potential_per_mw'] = 0
     
-    # Calculate wind generation (kWh)
-    # Assuming wind turbine with power curve
+    # --- Calculate Wind Generation Potential per MW ---
+    # Assuming wind turbine with power curve, scaled for 1 MW
     cut_in_speed = 3  # m/s
     rated_speed = 12  # m/s
     cut_out_speed = 25  # m/s
+    rated_capacity_kw = 1000 # Rated capacity for 1 MW turbine in kW
     
-    def wind_power_curve(speed):
+    def wind_power_curve_per_mw(speed):
         if speed < cut_in_speed:
             return 0
         elif speed > cut_out_speed:
             return 0
         elif speed >= rated_speed:
-            return wind_capacity
+            return rated_capacity_kw / 1000 # Return potential in kWh per hour
         else:
             # Correct cubic relationship between wind speed and power
-            # The correct formula applies the cube to just the wind speed, not to the entire ratio
             normalised_speed = (speed - cut_in_speed) / (rated_speed - cut_in_speed)
-            return wind_capacity * normalised_speed ** 3
+            # Calculate power in kW, then convert to kWh/hour potential
+            power_kw = (rated_capacity_kw * normalised_speed ** 3)
+            return power_kw / 1000
     
-    weather_data['wind_generation'] = weather_data['wind_speed'].apply(wind_power_curve)
+    weather_data['wind_potential_per_mw'] = weather_data['wind_speed'].apply(wind_power_curve_per_mw)
     
-    # Add additional columns
-    weather_data['total_generation'] = weather_data['pv_generation'] + weather_data['wind_generation']
+    # --- Remove old/unused generation columns ---
+    # weather_data.drop(columns=['pv_generation', 'wind_generation', 'total_generation'], errors='ignore', inplace=True)
+    
+    # --- Add time/season columns --- 
     weather_data['month'] = weather_data['timestamp'].dt.month
     weather_data['hour'] = weather_data['timestamp'].dt.hour
     weather_data['season'] = weather_data['timestamp'].dt.month % 12 // 3 + 1
@@ -332,235 +339,6 @@ def generate_synthetic_data(start_date, end_date, latitude, longitude):
     
     return data
 
-def get_timestamped_filename(filename):
-    """
-    Returns the original filename without adding a timestamp.
-    (Timestamping disabled for Strategy 1: Fixed Filenames)
-    
-    Parameters:
-    -----------
-    filename : str
-        Original filename
-    
-    Returns:
-    --------
-    str
-        The original filename
-    """
-    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    # name, ext = os.path.splitext(filename)
-    # return f"{name}_{timestamp}{ext}"
-    return filename # Return the original filename
-
-def save_data_to_csv(data, filename):
-    """
-    Save the data to a CSV file in the output_data directory
-    """
-    # Ensure the output_data directory exists
-    os.makedirs('output_data', exist_ok=True)
-    
-    # Create timestamped filename
-    timestamped_filename = get_timestamped_filename(filename)
-    
-    # Save the data
-    filepath = os.path.join('output_data', timestamped_filename)
-    data.to_csv(filepath, index=False)
-    print(f"Data saved to {filepath}")
-    
-    # Print some basic statistics
-    print("\nData Statistics:")
-    print(f"Total records: {len(data)}")
-    print(f"Time period: {data['timestamp'].min()} to {data['timestamp'].max()}")
-    print(f"Average PV generation: {data['pv_generation'].mean():.2f} kWh")
-    print(f"Average wind generation: {data['wind_generation'].mean():.2f} kWh")
-    print(f"Average total generation: {data['total_generation'].mean():.2f} kWh")
-
-def read_energy_data(csv_file):
-    """
-    Read and process the energy data from CSV file
-    Expected columns: timestamp, pv_generation, wind_generation, grid_emission_factor
-    """
-    df = pd.read_csv(csv_file)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    return df
-
-def calculate_gwp(energy_mix, emission_factors):
-    """
-    Calculate the global warming potential based on energy mix and emission factors
-    """
-    return np.sum(energy_mix * emission_factors)
-
-def optimise_energy_mix(energy_data, demand, capacity_constraints, emission_factors):
-    """
-    Optimise the energy mix to minimise global warming potential
-    """
-    # Initial guess (equal distribution)
-    x0 = np.array([0.2, 0.4, 0.4])  # Start with maximum PV and wind
-    
-    # Define constraints
-    constraints = [
-        {'type': 'eq', 'fun': lambda x: np.sum(x) - 1},  # Sum of fractions must be 1
-        {'type': 'ineq', 'fun': lambda x: x[0]},  # Grid fraction >= 0
-        {'type': 'ineq', 'fun': lambda x: x[1]},  # PV fraction >= 0
-        {'type': 'ineq', 'fun': lambda x: x[2]},  # Wind fraction >= 0
-        # Add minimum generation constraints
-        {'type': 'ineq', 'fun': lambda x: x[0] * demand - energy_data['total_generation'].min()},  # Grid must meet minimum
-        {'type': 'ineq', 'fun': lambda x: x[1] * demand - energy_data['pv_generation'].min()},    # PV must meet minimum
-        {'type': 'ineq', 'fun': lambda x: x[2] * demand - energy_data['wind_generation'].min()}   # Wind must meet minimum
-    ]
-    
-    # Define bounds based on capacity constraints
-    bounds = [
-        (0, capacity_constraints['grid']),
-        (0, capacity_constraints['pv']),
-        (0, capacity_constraints['wind'])
-    ]
-    
-    # Objective function to minimise
-    def objective(x):
-        total_emissions = (
-            x[0] * emission_factors['grid'] +
-            x[1] * emission_factors['pv'] +
-            x[2] * emission_factors['wind']
-        )
-        return total_emissions
-    
-    # Perform optimisation
-    result = minimize(
-        objective,
-        x0,
-        method='SLSQP',
-        bounds=bounds,
-        constraints=constraints,
-        options={'ftol': 1e-8, 'maxiter': 1000}
-    )
-    
-    if not result.success:
-        print(f"Warning: Optimisation may not have converged. Message: {result.message}")
-    
-    return result.x
-
-def plot_demand_sensitivity(energy_data, capacity_constraints, emission_factors, demand_scenarios=None):
-    """
-    Create a plot showing how the optimal energy mix changes with varying demand
-    
-    Parameters:
-    -----------
-    energy_data : pandas DataFrame
-        The energy generation data
-    capacity_constraints : dict
-        Maximum capacity constraints for each source
-    emission_factors : dict
-        Emission factors for each source
-    demand_scenarios : list, optional
-        List of specific demand values to analyze (in kWh)
-        If None, will create a range of values based on generation capacity
-    """
-    # If no specific demand scenarios provided, create a range
-    if demand_scenarios is None:
-        # Use a range from 20% to 120% of maximum total generation capacity
-        max_capacity = (
-            energy_data['pv_generation'].max() * capacity_constraints['pv'] +
-            energy_data['wind_generation'].max() * capacity_constraints['wind'] +
-            energy_data['total_generation'].max() * capacity_constraints['grid']
-        )
-        demand_values = np.linspace(0.2 * max_capacity, 1.2 * max_capacity, 50)
-    else:
-        demand_values = np.array(sorted(demand_scenarios))
-    
-    # Calculate optimal mix for each demand value
-    grid_shares = []
-    pv_shares = []
-    wind_shares = []
-    gwp_values = []
-    feasible_demands = []
-    
-    for demand in demand_values:
-        try:
-            optimal_mix = optimise_energy_mix(energy_data, demand, capacity_constraints, emission_factors)
-            grid_shares.append(optimal_mix[0] * 100)
-            pv_shares.append(optimal_mix[1] * 100)
-            wind_shares.append(optimal_mix[2] * 100)
-            gwp_values.append(calculate_gwp(optimal_mix, np.array(list(emission_factors.values()))))
-            feasible_demands.append(demand)
-        except Exception as e:
-            print(f"Warning: Could not find optimal mix for demand {demand:.1f} kWh")
-            continue
-    
-    # Convert to numpy arrays for easier manipulation
-    feasible_demands = np.array(feasible_demands)
-    grid_shares = np.array(grid_shares)
-    pv_shares = np.array(pv_shares)
-    wind_shares = np.array(wind_shares)
-    gwp_values = np.array(gwp_values)
-    
-    # Create the plot with two subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12), height_ratios=[2, 1])
-    
-    # Plot energy mix
-    ax1.plot(feasible_demands, grid_shares, label='Grid', linewidth=2, color='blue')
-    ax1.plot(feasible_demands, pv_shares, label='PV', linewidth=2, color='orange', linestyle='--')
-    ax1.plot(feasible_demands, wind_shares, label='Wind', linewidth=2, color='green', linestyle=':')
-    
-    # Add horizontal lines for capacity constraints
-    ax1.axhline(y=capacity_constraints['grid']*100, color='blue', linestyle=':', alpha=0.3)
-    ax1.axhline(y=capacity_constraints['pv']*100, color='orange', linestyle=':', alpha=0.3)
-    ax1.axhline(y=capacity_constraints['wind']*100, color='green', linestyle=':', alpha=0.3)
-    
-    # If specific demand scenarios were provided, mark them on the plot
-    if demand_scenarios is not None:
-        for demand in demand_scenarios:
-            if demand in feasible_demands:
-                ax1.axvline(x=demand, color='gray', linestyle='--', alpha=0.3)
-                # Find the optimal mix for this demand
-                idx = np.where(feasible_demands == demand)[0][0]
-                ax1.annotate(f'Demand: {demand:.0f} kWh\nGrid: {grid_shares[idx]:.1f}%\nPV: {pv_shares[idx]:.1f}%\nWind: {wind_shares[idx]:.1f}%',
-                            xy=(demand, 0),
-                            xytext=(10, 10),
-                            textcoords='offset points',
-                            bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.3))
-    
-    ax1.set_xlabel('Energy Demand (kWh)')
-    ax1.set_ylabel('Share of Energy Mix (%)')
-    ax1.set_title('Optimal Energy Mix vs. Energy Demand')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Add capacity constraint annotations
-    for source, constraint in capacity_constraints.items():
-        ax1.annotate(f'{source.capitalize()} Max: {constraint*100}%',
-                    xy=(feasible_demands[-1], constraint*100),
-                    xytext=(-100, 0),
-                    textcoords='offset points',
-                    color={'grid': 'blue', 'pv': 'orange', 'wind': 'green'}[source],
-                    alpha=0.7)
-    
-    # Plot GWP
-    ax2.plot(feasible_demands, gwp_values, label='GWP', color='red', linewidth=2)
-    ax2.set_xlabel('Energy Demand (kWh)')
-    ax2.set_ylabel('Global Warming Potential\n(kg CO2e/kWh)')
-    ax2.set_title('Global Warming Potential vs. Energy Demand')
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    # Ensure figures directory exists
-    os.makedirs('figures', exist_ok=True)
-    
-    # Save with timestamped filename
-    timestamped_filename = get_timestamped_filename('demand_sensitivity.png')
-    plt.savefig(os.path.join('figures', timestamped_filename))
-    plt.close()
-    
-    # Return the results for further analysis if needed
-    return pd.DataFrame({
-        'demand': feasible_demands,
-        'grid_share': grid_shares,
-        'pv_share': pv_shares,
-        'wind_share': wind_shares,
-        'gwp': gwp_values
-    })
-
 def calculate_temperature_adjusted_demand(base_demand, temperature):
     """
     Calculate temperature-adjusted energy demand
@@ -583,537 +361,677 @@ def calculate_temperature_adjusted_demand(base_demand, temperature):
     # Return adjusted demand
     return base_demand * adjustment
 
-def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2):
+def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2, 
+                       pv_land_per_mw=0.02, wind_land_per_mw=0.26, 
+                       pv_gwp=0.041, wind_gwp=0.011, grid_gwp=0.65, 
+                       pv_capacities=np.linspace(0, 300, 30), wind_capacities=np.linspace(0, 200, 30), 
+                       figures_dir='figures', output_data_dir='output_data',
+                       target_demand_temp_threshold=30, target_demand_increase_factor=1.2,
+                       # --- Battery Parameters ---
+                       battery_capacity_mwh=120, # Added: Fixed battery capacity in MWh
+                       battery_power_mw=90,     # Added: Fixed battery power rating in MW (0.75C of 120 MWh)
+                       battery_efficiency=0.90, # Added: Round-trip efficiency (applied on discharge)
+                       battery_min_soc=0.20):  # Added: Minimum state of charge
     """
-    Optimise PV and wind installation to minimise GWP with land constraint
-    
-    Parameters:
-    -----------
-    energy_data : pandas DataFrame
-        The energy generation data
-    annual_demand_mwh : float
-        Annual energy demand in MWh
-    available_land_km2 : float
-        Available land in square kilometers
-    
-    Returns:
-    --------
-    dict
-        Containing the optimal mix information
-    """
-    # Convert annual demand to hourly demand for the calculation
-    hourly_demand_kwh = annual_demand_mwh * 1000 / 8760  # Convert MWh/year to kWh/hour
-    
-    # Adjust demand based on temperature if temperature data is available
-    if 'temperature' in energy_data.columns:
-        # Apply initial temperature-based demand adjustment logic
-        initial_adjusted_hourly_demand = calculate_temperature_adjusted_demand(hourly_demand_kwh, energy_data['temperature'].values)
-        
-        # Calculate the total annual kWh from this initial profile
-        initial_total_annual_kwh = initial_adjusted_hourly_demand.sum()
-        
-        # Define the target total annual demand in kWh
-        target_total_annual_kwh = annual_demand_mwh * 1000
-        
-        # Calculate the scaling factor needed to match the target
-        # Avoid division by zero if initial total is zero
-        if initial_total_annual_kwh > 0:
-            scaling_factor = target_total_annual_kwh / initial_total_annual_kwh
-        else:
-            scaling_factor = 1.0 # Or handle as an error/warning if appropriate
-            print("Warning: Initial adjusted annual demand is zero. Cannot scale.")
+    Optimises PV and Wind capacity to meet annual demand within land constraints,
+    minimising GWP, incorporating fixed battery storage. Also includes
+    temperature-adjusted demand and generates outputs.
 
-        # Apply the scaling factor to the hourly demand profile
-        adjusted_hourly_demand = initial_adjusted_hourly_demand * scaling_factor
-        print(f"Scaled temperature-adjusted demand profile to meet target {annual_demand_mwh:.2f} MWh/year.")
-        print(f" - Initial profile total: {initial_total_annual_kwh / 1000:.2f} MWh/year")
-        print(f" - Scaling factor applied: {scaling_factor:.4f}")
-        print(f" - Final profile total: {adjusted_hourly_demand.sum() / 1000:.2f} MWh/year")
-        
-        # --- Summarise temperature effects based on the *final* scaled profile ---
-        print(f"\nTemperature effects on *scaled* demand (base: {hourly_demand_kwh:.2f} kWh/hour average):")
-        # Create temperature band analysis
-        temp_bands = [(float('-inf'), 0), (0, 5), (5, 10), (10, 15), (15, 20), (20, 25), 
-                      (25, 30), (30, 35), (35, 40), (40, float('inf'))]
-        temp_band_hours = {}
-        temp_band_demand = {}
-        
-        for lower, upper in temp_bands:
-            if lower == float('-inf'):
-                mask = energy_data['temperature'] < upper
-                band_name = f"<{upper}°C"
-            elif upper == float('inf'):
-                mask = energy_data['temperature'] >= lower
-                band_name = f"≥{lower}°C"
-            else:
-                mask = (energy_data['temperature'] >= lower) & (energy_data['temperature'] < upper)
-                band_name = f"{lower}-{upper}°C"
-            
-            temp_band_hours[band_name] = mask.sum()
-            if mask.sum() > 0:
-                # Calculate demand factor relative to the *average* hourly demand of the *final* scaled profile
-                final_average_hourly_kwh = adjusted_hourly_demand.mean() 
-                temp_band_demand[band_name] = adjusted_hourly_demand[mask].mean() / final_average_hourly_kwh
-        
-        print("\nTemperature band analysis (demand factor relative to final profile average):")
-        print(f"{'Temperature band':<15} {'Hours':<10} {'% of year':<12} {'Demand factor':<15}")
-        print("-" * 55)
-        for band in sorted(temp_band_hours.keys()):
-            hours = temp_band_hours[band]
-            pct = hours / len(energy_data) * 100
-            factor = temp_band_demand.get(band, 0)
-            print(f"{band:<15} {hours:<10} {pct:5.1f}%       {factor:6.3f}x")
-    else:
-        # If no temperature data, use constant demand
-        print("No temperature data available, using constant demand profile")
-        adjusted_hourly_demand = np.ones(len(energy_data)) * hourly_demand_kwh
+    Args:
+        energy_data (pd.DataFrame): Processed weather data with potential generation per MW.
+        annual_demand_mwh (float): Target total annual energy demand in MWh.
+        available_land_km2 (float): Maximum land area available for PV and Wind.
+        pv_land_per_mw (float): Land required per MW of PV capacity (km²/MW).
+        wind_land_per_mw (float): Land required per MW of Wind capacity (km²/MW).
+        pv_gwp (float): GWP for PV (kg CO2e/kWh).
+        wind_gwp (float): GWP for Wind (kg CO2e/kWh).
+        grid_gwp (float): GWP for Grid (kg CO2e/kWh).
+        pv_capacities (np.array): Range of PV capacities (MW) to test.
+        wind_capacities (np.array): Range of Wind capacities (MW) to test.
+        figures_dir (str): Directory to save plots.
+        output_data_dir (str): Directory to save output CSV data.
+        target_demand_temp_threshold (float): Temperature threshold (°C) for increased demand.
+        target_demand_increase_factor (float): Factor by which demand increases above threshold.
+        battery_capacity_mwh (float): Energy capacity of the battery storage in MWh.
+        battery_power_mw (float): Maximum charge/discharge power of the battery in MW.
+        battery_efficiency (float): Round-trip efficiency of the battery.
+        battery_min_soc (float): Minimum allowed state of charge fraction (e.g., 0.2 for 20%).
+
+    Returns:
+        dict: Dictionary containing the results of the optimisation.
+    """
+    print("Starting land use optimisation...")
+    print(f"Target Annual Demand: {annual_demand_mwh} MWh")
+    print(f"Available Land: {available_land_km2} km²")
+    print(f"PV Land Use: {pv_land_per_mw} km²/MW, Wind Land Use: {wind_land_per_mw} km²/MW")
+    print(f"GWP Factors (kg CO2e/kWh): PV={pv_gwp}, Wind={wind_gwp}, Grid={grid_gwp}")
+    print(f"Battery: {battery_capacity_mwh} MWh, {battery_power_mw} MW, {battery_efficiency*100}% eff, {battery_min_soc*100}% min SoC")
+
+    # Ensure output directories exist
+    os.makedirs(figures_dir, exist_ok=True)
+    os.makedirs(output_data_dir, exist_ok=True)
+    os.makedirs(os.path.join(figures_dir, 'monthly_first_week_profiles'), exist_ok=True)
+
+    # --- Demand Calculation with Temperature Adjustment ---
+    num_hours = len(energy_data)
+    base_hourly_demand = (annual_demand_mwh * 1000) / num_hours # Convert MWh to kWh
+    print(f"Calculated base average hourly demand: {base_hourly_demand:.2f} kWh")
+
+    # Apply temperature adjustment
+    energy_data['demand'] = base_hourly_demand
+    temp_increase_mask = energy_data['temperature'] > target_demand_temp_threshold
+    energy_data.loc[temp_increase_mask, 'demand'] *= target_demand_increase_factor
     
-    # Land use factors (approximate values)
-    # PV requires ~2 ha (0.02 km²) per MW installed capacity
-    # Wind requires ~40 ha (0.4 km²) per MW installed capacity, but spacing allows multiple use
-    pv_land_use_km2_per_mw = 0.02
-    wind_land_use_km2_per_mw = 0.4
+    # Scale demand to exactly match the annual target
+    current_annual_demand_kwh = energy_data['demand'].sum()
+    required_annual_demand_kwh = annual_demand_mwh * 1000
+    scaling_factor = required_annual_demand_kwh / current_annual_demand_kwh if current_annual_demand_kwh > 0 else 1
+    energy_data['demand'] *= scaling_factor
+    final_annual_demand_kwh = energy_data['demand'].sum()
+    print(f"Temperature-adjusted annual demand calculated: {final_annual_demand_kwh / 1000:.2f} MWh (scaling factor: {scaling_factor:.4f})")
     
-    # Emission factors (kg CO2e/kWh)
-    emission_factors = {
-        'grid': 0.65,  # Updated grid emission factor
-        'pv': 0.041,   # Typical PV emission factor
-        'wind': 0.011  # Typical wind emission factor
+    # Store adjusted demand for later use
+    adjusted_demand_profile = energy_data['demand'].copy()
+
+    # --- Initialize best_mix with high grid usage and GWP ---
+    best_mix = {
+        'pv_capacity': -1, 
+        'wind_capacity': -1, 
+        'total_gwp': float('inf'), 
+        'land_used': -1,
+        'pv_annual_total': 0,
+        'wind_annual_total': 0,
+        'grid_annual_total': float('inf'), # Primary objective: minimize this
+        'total_annual_generation': 0,
+        'pv_share': 0,
+        'wind_share': 0,
+        'grid_share': 0,
+        'grid_deficit_hours': 0,
+        'grid_deficit_percentage': 0,
+        'max_hourly_deficit': 0,
+        'pv_hourly': None, # Store hourly data for the optimal mix
+        'wind_hourly': None,
+        'grid_hourly': None,
+        'demand_hourly': None,
+        'battery_soc_hourly': None, # Added: Battery State of Charge
+        'battery_charge_hourly': None, # Added: Battery Charge
+        'battery_discharge_hourly': None, # Added: Battery Discharge
+        'curtailment_hourly': None, # Added: Renewable Curtailment
+        'battery_cycles': 0 # Added: Estimated battery cycles
     }
-    
-    # Calculate unit generation profiles (scaled to 1 MW capacity)
-    pv_unit_generation = energy_data['pv_generation'] / energy_data['pv_generation'].max() if energy_data['pv_generation'].max() > 0 else 0
-    wind_unit_generation = energy_data['wind_generation'] / energy_data['wind_generation'].max() if energy_data['wind_generation'].max() > 0 else 0
-    
-    # Calculate capacity factors
-    pv_capacity_factor = pv_unit_generation.mean()
-    wind_capacity_factor = wind_unit_generation.mean()
-    
-    print(f"PV capacity factor: {pv_capacity_factor:.3f}")
-    print(f"Wind capacity factor: {wind_capacity_factor:.3f}")
-    
-    # Maximum capacity based on land constraints
-    max_pv_capacity = available_land_km2 / pv_land_use_km2_per_mw
-    max_wind_capacity = available_land_km2 / wind_land_use_km2_per_mw
-    
-    print(f"Max PV capacity with available land: {max_pv_capacity:.2f} MW")
-    print(f"Max wind capacity with available land: {max_wind_capacity:.2f} MW")
-    
-    # We'll use a grid search approach to find the optimal mix
-    # This is more reliable than optimisation for this specific problem
-    
-    # Define the grid for PV and wind capacities
-    # We'll use a smaller number of points to speed up the search
-    # This is a small problem so we don't need a very fine grid
-    # Scale down the search space to more realistic capacities for a 40 MWh/year demand
-    max_relevant_pv = min(max_pv_capacity, 50)  # PV systems are usually smaller than the theoretical max
-    max_relevant_wind = min(max_wind_capacity, 50)  # Wind systems are usually smaller than the theoretical max
-    
-    pv_capacities = np.linspace(0, max_relevant_pv, 20)  # 20 points instead of 20
-    wind_capacities = np.linspace(0, max_relevant_wind, 20)  # 20 points instead of 20
-    
-    # Initialize variables to track the best solution
-    best_gwp = float('inf')
-    best_mix = None
-    
-    # Grid search
-    print("Starting grid search for optimal mix...")
-    for pv_capacity_mw in pv_capacities:
-        for wind_capacity_mw in wind_capacities:
-            # Calculate land usage
-            pv_land = pv_capacity_mw * pv_land_use_km2_per_mw
-            wind_land = wind_capacity_mw * wind_land_use_km2_per_mw
+    total_combinations = len(pv_capacities) * len(wind_capacities)
+    print(f"Starting grid search over {total_combinations} capacity combinations (with battery simulation)...\n")
+    count = 0
+
+    # --- Add flag for verbose debugging ---
+    verbose_debug = True # Set to False to reduce output
+
+    for pv_cap in pv_capacities:
+        for wind_cap in wind_capacities:
+            count += 1
+            # --- Optional: Reduce debug output frequency ---
+            # verbose_print = verbose_debug and (count % 100 == 0 or count == 1) 
+            verbose_print = verbose_debug # Print for every combination for now
+
+            if verbose_print: 
+                 print(f"\n-- Checking Combo {count}/{total_combinations}: PV={pv_cap:.1f} MW, Wind={wind_cap:.1f} MW --")
+                 
+            # Calculate land use for this combination
+            pv_land = pv_cap * pv_land_per_mw
+            wind_land = wind_cap * wind_land_per_mw
             total_land = pv_land + wind_land
-            
-            # Skip if land usage exceeds available land
+            if verbose_print: print(f"  Land Used: {total_land:.2f} km² (PV: {pv_land:.2f}, Wind: {wind_land:.2f}) / {available_land_km2:.2f} km² limit")
+
+            # Check land constraint
             if total_land > available_land_km2:
-                continue
+                if verbose_print: print("  Skipping: Exceeds land limit.")
+                continue # Skip if land constraint is violated
+
+            # Calculate hourly generation for this capacity mix
+            pv_hourly = energy_data['pv_potential_per_mw'] * pv_cap
+            wind_hourly = energy_data['wind_potential_per_mw'] * wind_cap
+            renewable_total_hourly = pv_hourly + wind_hourly
+
+            # Use the pre-calculated adjusted demand profile
+            demand_hourly = adjusted_demand_profile
             
-            # Calculate hourly generation
-            pv_hourly = pv_unit_generation * pv_capacity_mw
-            wind_hourly = wind_unit_generation * wind_capacity_mw
-            renewable_hourly = pv_hourly + wind_hourly
+            # --- Initialize Battery Simulation Variables ---
+            num_hours = len(energy_data)
+            battery_capacity_kwh = battery_capacity_mwh * 1000
+            battery_power_kw = battery_power_mw * 1000
+            min_soc_kwh = battery_capacity_kwh * battery_min_soc
             
-            # Calculate grid contribution (deficit to be supplied by grid)
-            # Use temperature-adjusted demand
-            grid_hourly = np.maximum(0, adjusted_hourly_demand - renewable_hourly)
+            # Start battery at minimum state of charge
+            battery_soc_hourly = np.zeros(num_hours + 1) # +1 to store final state easily
+            battery_soc_hourly[0] = min_soc_kwh 
             
-            # Calculate annual generation
-            pv_annual_kwh = pv_hourly.sum()
-            wind_annual_kwh = wind_hourly.sum()
-            grid_annual_kwh = grid_hourly.sum()
-            total_annual_kwh = pv_annual_kwh + wind_annual_kwh + grid_annual_kwh
+            battery_charge_hourly = np.zeros(num_hours)
+            battery_discharge_hourly = np.zeros(num_hours) # Net energy delivered by battery
+            grid_required_hourly = np.zeros(num_hours)
+            curtailment_hourly = np.zeros(num_hours)
             
-            # Skip solutions that don't meet annual demand
-            total_demand_kwh = adjusted_hourly_demand.sum()
-            if total_annual_kwh < total_demand_kwh * 0.99:  # Allow 1% tolerance
-                continue
+            # --- Hourly Energy Balance Loop with Battery ---
+            for t in range(num_hours):
+                current_soc_kwh = battery_soc_hourly[t]
                 
-            # Calculate shares
-            pv_share = pv_annual_kwh / total_annual_kwh
-            wind_share = wind_annual_kwh / total_annual_kwh
-            grid_share = grid_annual_kwh / total_annual_kwh
+                # Get generation and demand for the hour (kWh)
+                renewable_gen_kwh = renewable_total_hourly.iloc[t]
+                demand_kwh = demand_hourly.iloc[t]
+                balance_kwh = renewable_gen_kwh - demand_kwh
+
+                charge_kwh = 0
+                discharge_net_kwh = 0
+                grid_kwh = 0
+                curtailment_kwh = 0
+                actual_discharge_gross_kwh = 0 # Energy leaving battery storage
+
+                if balance_kwh > 0: # Excess generation
+                    potential_charge_kwh = balance_kwh
+                    soc_space_kwh = battery_capacity_kwh - current_soc_kwh
+                    
+                    # Charge limited by excess, power rating, and available SoC space
+                    charge_kwh = min(potential_charge_kwh, battery_power_kw, soc_space_kwh)
+                    
+                    # Update SoC
+                    current_soc_kwh += charge_kwh
+                    curtailment_kwh = potential_charge_kwh - charge_kwh # Store curtailed energy
+                
+                elif balance_kwh < 0: # Deficit
+                    deficit_kwh = abs(balance_kwh)
+                    
+                    # Max energy that *can* leave battery physically (respecting min SoC)
+                    available_discharge_gross_kwh = current_soc_kwh - min_soc_kwh
+                    
+                    # Max energy that *can* leave battery due to power limit
+                    power_limited_discharge_gross_kwh = battery_power_kw 
+                    
+                    # Potential discharge (limited by SoC and Power)
+                    potential_discharge_gross_kwh = min(available_discharge_gross_kwh, power_limited_discharge_gross_kwh)
+
+                    # How much gross energy needs to leave battery to meet deficit (after efficiency loss)
+                    discharge_needed_gross_kwh = deficit_kwh / battery_efficiency
+                    
+                    # Actual gross energy leaving battery
+                    actual_discharge_gross_kwh = min(potential_discharge_gross_kwh, discharge_needed_gross_kwh)
+                    
+                    # Net energy delivered to meet demand
+                    discharge_net_kwh = actual_discharge_gross_kwh * battery_efficiency
+                    
+                    # Update SoC
+                    current_soc_kwh -= actual_discharge_gross_kwh
+                    
+                    # Grid makes up the rest
+                    grid_kwh = max(0, deficit_kwh - discharge_net_kwh) # Ensure grid is non-negative
+                
+                # Store results for the hour
+                battery_soc_hourly[t+1] = current_soc_kwh
+                battery_charge_hourly[t] = charge_kwh
+                battery_discharge_hourly[t] = discharge_net_kwh # Store net delivered energy
+                grid_required_hourly[t] = grid_kwh
+                curtailment_hourly[t] = curtailment_kwh
+
+            # Convert hourly numpy arrays back to pandas Series with correct index
+            grid_required_hourly_series = pd.Series(grid_required_hourly, index=energy_data.index)
+            battery_soc_hourly_series = pd.Series(battery_soc_hourly[:-1], index=energy_data.index) # Exclude final state for length match
+            battery_charge_hourly_series = pd.Series(battery_charge_hourly, index=energy_data.index)
+            battery_discharge_hourly_series = pd.Series(battery_discharge_hourly, index=energy_data.index)
+            curtailment_hourly_series = pd.Series(curtailment_hourly, index=energy_data.index)
+
+            # Calculate annual totals (kWh) using the new grid_required_hourly
+            pv_annual = pv_hourly.sum()
+            wind_annual = wind_hourly.sum()
+            grid_annual = grid_required_hourly_series.sum() # Use grid after battery
+            battery_discharge_annual = battery_discharge_hourly_series.sum() # Total energy delivered by battery
+
+            # Total generation = PV + Wind + Grid (Battery discharge is intermediate transfer, not primary source)
+            total_generation_annual = pv_annual + wind_annual + grid_annual 
+            total_demand_annual = demand_hourly.sum() # Demand remains the same
+            total_curtailment_annual = curtailment_hourly_series.sum() # Total curtailed energy
             
-            # Calculate GWP
-            gwp = (
-                pv_share * emission_factors['pv'] +
-                wind_share * emission_factors['wind'] +
-                grid_share * emission_factors['grid']
-            )
-            
-            # Calculate stability metrics
-            hours_with_deficit = (grid_hourly > 0).sum()
-            deficit_percentage = hours_with_deficit / len(energy_data) * 100
-            max_deficit = grid_hourly.max()
-            
-            # Update best solution if this is better
-            if gwp < best_gwp:
-                best_gwp = gwp
-                best_mix = {
-                    'pv_capacity_mw': pv_capacity_mw,
-                    'wind_capacity_mw': wind_capacity_mw,
-                    'pv_land_km2': pv_land,
-                    'wind_land_km2': wind_land,
-                    'total_land_km2': total_land,
-                    'pv_annual_mwh': pv_annual_kwh / 1000,
-                    'wind_annual_mwh': wind_annual_kwh / 1000,
-                    'grid_annual_mwh': grid_annual_kwh / 1000,
-                    'total_annual_mwh': total_annual_kwh / 1000,
-                    'pv_percentage': pv_share * 100,
-                    'wind_percentage': wind_share * 100,
-                    'grid_percentage': grid_share * 100,
-                    'total_gwp': gwp,
-                    'hours_with_deficit': hours_with_deficit,
-                    'deficit_percentage': deficit_percentage,
-                    'max_hourly_deficit_kwh': max_deficit,
-                    'pv_hourly': pv_hourly,
-                    'wind_hourly': wind_hourly,
-                    'grid_hourly': grid_hourly,
-                    'demand_hourly': adjusted_hourly_demand
-                }
-                print(f"New best solution: PV={pv_capacity_mw:.2f} MW, Wind={wind_capacity_mw:.2f} MW, GWP={gwp:.4f} kg CO2e/kWh")
-    
-    if best_mix is None:
-        raise ValueError("No feasible solution found. Try adjusting constraints.")
-    
-    # Create hourly supply profile for the best solution
-    supply_profile = pd.DataFrame({
+            # Estimate battery cycles (e.g., using total discharged energy)
+            # Simple estimation: total discharged energy / battery capacity
+            if battery_capacity_kwh > 0:
+                 estimated_cycles = battery_discharge_annual / battery_capacity_kwh
+            else:
+                 estimated_cycles = 0
+
+            # Calculate GWP per kWh (overall average, considering grid usage after battery)
+            if total_generation_annual > 0:
+                # GWP calculation now only includes PV, Wind, and final Grid contributions
+                # Battery GWP could be added (lifecycle) but is omitted here for simplicity
+                overall_gwp_per_kwh = (pv_annual * pv_gwp + wind_annual * wind_gwp + grid_annual * grid_gwp) / total_generation_annual
+            else:
+                overall_gwp_per_kwh = float('inf') # Avoid division by zero
+            if verbose_print: 
+                print(f"  Annual Totals (kWh): PV={pv_annual:.0f}, Wind={wind_annual:.0f}, Grid={grid_annual:.0f}, Bat Discharge={battery_discharge_annual:.0f}, Curtailment={total_curtailment_annual:.0f}")
+                print(f"  Average GWP: {overall_gwp_per_kwh:.4f} kg CO2e/kWh")
+                print(f"  Estimated Battery Cycles: {estimated_cycles:.1f}")
+
+            # --- Comparison Logic: Minimize overall_gwp_per_kwh --- 
+            update_best = False
+            # Primary objective: Lower GWP is always better
+            if overall_gwp_per_kwh < best_mix['total_gwp']:
+                update_best = True
+                reason = "Lower GWP/kWh"
+            # Secondary objective: If GWP is the same, prefer lower grid usage (optional tie-breaker)
+            elif np.isclose(overall_gwp_per_kwh, best_mix['total_gwp'], rtol=1e-5) and grid_annual < best_mix['grid_annual_total']:
+                 update_best = True
+                 reason = "Same GWP/kWh, lower grid usage"
+
+            if update_best:
+                if verbose_print: 
+                    print(f"  *** New Best Mix Found! Reason: {reason}. ***")
+                    print(f"      (Previous GWP: {best_mix['total_gwp']:.4f}, Grid: {best_mix['grid_annual_total']:.0f} kWh) -> ")
+                    print(f"      (New GWP:      {overall_gwp_per_kwh:.4f}, Grid: {grid_annual:.0f} kWh)")
+                      
+                best_mix['pv_capacity'] = pv_cap
+                best_mix['wind_capacity'] = wind_cap
+                best_mix['total_gwp'] = overall_gwp_per_kwh # Store the primary objective value
+                best_mix['grid_annual_total'] = grid_annual # Store grid usage for tie-breaking and info
+                best_mix['land_used'] = total_land
+                best_mix['pv_land'] = pv_land
+                best_mix['wind_land'] = wind_land
+                best_mix['pv_annual_total'] = pv_annual
+                best_mix['wind_annual_total'] = wind_annual
+                # Grid annual total already updated
+                best_mix['total_annual_generation'] = total_generation_annual
+                
+                # Store hourly profiles for the best mix found so far
+                best_mix['pv_hourly'] = pv_hourly.copy()
+                best_mix['wind_hourly'] = wind_hourly.copy()
+                best_mix['grid_hourly'] = grid_required_hourly_series.copy()
+                best_mix['demand_hourly'] = demand_hourly.copy()
+                best_mix['battery_soc_hourly'] = battery_soc_hourly_series.copy()
+                best_mix['battery_charge_hourly'] = battery_charge_hourly_series.copy()
+                best_mix['battery_discharge_hourly'] = battery_discharge_hourly_series.copy()
+                best_mix['curtailment_hourly'] = curtailment_hourly_series.copy()
+                best_mix['battery_cycles'] = estimated_cycles # Float, no copy needed
+
+    print(f"Grid search finished. Optimal combination found.")
+
+    # --- Post-Optimisation Analysis & Output Generation ---
+    if best_mix['pv_capacity'] == -1:
+        print("Error: No valid solution found within constraints.")
+        # Return default or indicate failure
+        return {"error": "No feasible solution found"}
+
+    print("\n--- Optimal Mix Results ---")
+    print(f"Optimal PV Capacity: {best_mix['pv_capacity']:.2f} MW")
+    print(f"Optimal Wind Capacity: {best_mix['wind_capacity']:.2f} MW")
+    print(f"Total Land Used: {best_mix['land_used']:.2f} km² (PV: {best_mix['pv_land']:.2f} km², Wind: {best_mix['wind_land']:.2f} km²)")
+    print(f"Minimum Overall GWP: {best_mix['total_gwp']:.4f} kg CO2e/kWh")
+    print(f"Total Annual Generation: {best_mix['total_annual_generation']/1000:.2f} MWh")
+    print(f"  PV Contribution: {best_mix['pv_annual_total']/1000:.2f} MWh")
+    print(f"  Wind Contribution: {best_mix['wind_annual_total']/1000:.2f} MWh")
+    print(f"  Grid Contribution: {best_mix['grid_annual_total']/1000:.2f} MWh")
+    print(f"  Battery Discharged (net): {best_mix['battery_discharge_hourly'].sum()/1000:.2f} MWh")
+    print(f"  Estimated Battery Cycles: {best_mix['battery_cycles']:.1f}")
+
+    # Calculate percentage shares
+    total_gen = best_mix['total_annual_generation']
+    if total_gen > 0:
+        best_mix['pv_share'] = (best_mix['pv_annual_total'] / total_gen) * 100
+        best_mix['wind_share'] = (best_mix['wind_annual_total'] / total_gen) * 100
+        best_mix['grid_share'] = (best_mix['grid_annual_total'] / total_gen) * 100
+    else:
+        best_mix['pv_share'] = 0
+        best_mix['wind_share'] = 0
+        best_mix['grid_share'] = 0
+        
+    print(f"Energy Mix (%): PV={best_mix['pv_share']:.1f}%, Wind={best_mix['wind_share']:.1f}%, Grid={best_mix['grid_share']:.1f}%")
+
+    # Calculate grid deficit metrics using the stored optimal hourly data
+    optimal_supply_profile = pd.DataFrame({
         'timestamp': energy_data['timestamp'],
         'pv_generation': best_mix['pv_hourly'],
         'wind_generation': best_mix['wind_hourly'],
         'renewable_total': best_mix['pv_hourly'] + best_mix['wind_hourly'],
         'demand': best_mix['demand_hourly'],
-        'grid_required': best_mix['grid_hourly']
+        'grid_required': best_mix['grid_hourly'],
+        'temperature': energy_data['temperature'], # Include temperature for analysis
+        'battery_soc': best_mix['battery_soc_hourly'] / 1000, # Convert to MWh for profile
+        'battery_charge': best_mix['battery_charge_hourly'],
+        'battery_discharge': best_mix['battery_discharge_hourly'],
+        'curtailment': best_mix['curtailment_hourly']
     })
-    
-    # If temperature data is available, add it to the supply profile
-    if 'temperature' in energy_data.columns:
-        supply_profile['temperature'] = energy_data['temperature']
-    
-    # Save the hourly supply profile for further analysis
-    # Ensure output_data directory exists
-    os.makedirs('output_data', exist_ok=True)
-    
-    # Save with timestamped filename
-    timestamped_filename = get_timestamped_filename('optimal_supply_profile.csv')
-    supply_profile.to_csv(os.path.join('output_data', timestamped_filename), index=False)
-    
-    # --- Generate Hourly Supply Profile Plots for First Week of Each Month ---
-    print("\nGenerating weekly supply profile plots for each available month...")
-    # Create a dedicated directory for these plots
-    monthly_plots_dir = 'figures/monthly_first_week_profiles'
-    os.makedirs(monthly_plots_dir, exist_ok=True)
 
-    unique_months = sorted(supply_profile['timestamp'].dt.month.unique())
+    grid_deficit_hours = (optimal_supply_profile['grid_required'] > 0.001).sum() # Count hours with > 0.001 kWh grid use
+    total_hours = len(optimal_supply_profile)
+    grid_deficit_percentage = (grid_deficit_hours / total_hours) * 100 if total_hours > 0 else 0
+    max_hourly_deficit = optimal_supply_profile['grid_required'].max()
+
+    best_mix['grid_deficit_hours'] = grid_deficit_hours
+    best_mix['grid_deficit_percentage'] = grid_deficit_percentage
+    best_mix['max_hourly_deficit'] = max_hourly_deficit
+
+    print(f"Grid required for {grid_deficit_hours} hours ({grid_deficit_percentage:.1f}% of the year)")
+    print(f"Maximum hourly grid requirement: {max_hourly_deficit:.2f} kWh")
+
+    # Calculate hourly GWP for the optimal mix
+    # Note: Denominator now includes only the final supply sources (PV, Wind, Grid)
+    hourly_supply_sum = (optimal_supply_profile['pv_generation'] + 
+                         optimal_supply_profile['wind_generation'] + 
+                         optimal_supply_profile['grid_required'])
     
-    for month in unique_months:
-        # Find the start of the month in the data
-        month_data = supply_profile[supply_profile['timestamp'].dt.month == month]
-        if month_data.empty:
-            continue # Skip if no data for this month (shouldn't happen with unique_months)
-            
-        start_of_month_ts = month_data['timestamp'].min()
-        # Define the end of the first week (start + 7 days)
-        end_of_first_week_ts = start_of_month_ts + pd.Timedelta(days=7)
-        
-        # Select data for the first week of this month
-        sample_week = supply_profile[
-            (supply_profile['timestamp'] >= start_of_month_ts) & 
-            (supply_profile['timestamp'] < end_of_first_week_ts)
-        ].copy()
+    optimal_supply_profile['hourly_gwp'] = (
+        (optimal_supply_profile['pv_generation'] * pv_gwp) + 
+        (optimal_supply_profile['wind_generation'] * wind_gwp) + 
+        (optimal_supply_profile['grid_required'] * grid_gwp)
+    ) / hourly_supply_sum.replace(0, np.nan) # Avoid division by zero
 
-        if sample_week.empty:
-            print(f"Warning: No data found for the first week of month {month}. Skipping plot.")
-            continue
+    
+    # --- Data Saving ---
+    print("Saving output data...")
+    # Save the potential generation data (from input energy_data)
+    # potential_data_filename = get_timestamped_filename("australian_energy_data.csv")
+    # save_data_to_csv(energy_data, os.path.join(output_data_dir, "australian_energy_data.csv")) # Removed: Redundant, already saved in main()
+    # print(f"Saved potential generation data to output_data/australian_energy_data.csv")
 
-        # --- Smoothing and Sorting for Plotting ---
-        sample_week = sample_week.sort_values('timestamp')
-        window_size = 6
-        cols_to_smooth = ['pv_generation', 'wind_generation', 'renewable_total', 'demand', 'grid_required']
-        for col in cols_to_smooth:
-            sample_week[f'{col}_smoothed'] = sample_week[col].rolling(window=window_size, center=True, min_periods=1).mean()
-        # --- End Smoothing ---
+    # Save the optimal supply profile (pass only filename)
+    optimal_profile_filename = get_timestamped_filename("optimal_supply_profile.csv")
+    # save_data_to_csv(optimal_supply_profile, os.path.join(output_data_dir, "optimal_supply_profile.csv"))
+    save_data_to_csv(optimal_supply_profile, optimal_profile_filename) # Pass only filename
+    print(f"Saved optimal supply profile to output_data/{optimal_profile_filename}")
 
-        plt.figure(figsize=(15, 10))
-        month_name = start_of_month_ts.strftime('%B') # Get month name
+    # --- Plotting ---
+    print("Generating plots...")
+    
+    # Define consistent colors
+    pv_color = 'gold'
+    wind_color = 'deepskyblue'
+    grid_color = 'dimgray'
+    demand_color = 'red'
+    temp_color = 'lightcoral'
 
-        # --- Plot 1: Supply/Demand ---
-        plt.subplot(2, 1, 1)
-        plt.plot(sample_week['timestamp'], sample_week['pv_generation_smoothed'], label='PV (Smoothed)', color='orange')
-        plt.plot(sample_week['timestamp'], sample_week['wind_generation_smoothed'], label='Wind (Smoothed)', color='green')
-        plt.plot(sample_week['timestamp'], sample_week['demand_smoothed'], label='Demand (Smoothed)', color='black', linestyle='--')
-        plt.fill_between(sample_week['timestamp'], 0, sample_week['grid_required_smoothed'], color='blue', alpha=0.3, label='Grid Required (Smoothed)')
-        plt.title(f'Hourly Energy Supply and Demand (First Week of {month_name} - {window_size}hr Smoothed)')
-        plt.ylabel('kWh')
-        plt.legend()
-        
-        # --- Plot 2: Renewable/Demand ---
-        plt.subplot(2, 1, 2)
-        plt.plot(sample_week['timestamp'], sample_week['renewable_total_smoothed'], label='Renewable Generation (Smoothed)', color='green')
-        plt.plot(sample_week['timestamp'], sample_week['demand_smoothed'], label='Demand (Smoothed)', color='black', linestyle='--')
-        plt.fill_between(sample_week['timestamp'], 
-                        sample_week['renewable_total_smoothed'], 
-                        sample_week['demand_smoothed'], 
-                        where=(sample_week['demand_smoothed'] > sample_week['renewable_total_smoothed']),
-                        color='blue', alpha=0.3, label='Grid Required (Smoothed)')
-        plt.title(f'Renewable Generation vs. Demand (First Week of {month_name} - {window_size}hr Smoothed)')
-        plt.ylabel('kWh')
-        plt.legend()
-        
+    # Plot 1: Generation Profiles (Potential per MW and Temperature)
+    try:
+        fig_gen, ax1 = plt.subplots(figsize=(15, 6))
+
+        # Plot potential generation per MW on primary y-axis
+        ax1.plot(energy_data['timestamp'], energy_data['pv_potential_per_mw'], label='Potential PV Gen (per MW)', color=pv_color, alpha=0.7)
+        ax1.plot(energy_data['timestamp'], energy_data['wind_potential_per_mw'], label='Potential Wind Gen (per MW)', color=wind_color, alpha=0.7)
+        ax1.set_xlabel('Date')
+        ax1.set_ylabel('Potential Generation (kWh per MW)', color='black')
+        ax1.tick_params(axis='y', labelcolor='black')
+        ax1.legend(loc='upper left')
+        ax1.grid(True, linestyle='--', alpha=0.5)
+
+        # Create secondary y-axis for temperature
+        ax2 = ax1.twinx()
+        ax2.plot(energy_data['timestamp'], energy_data['temperature'], label='Temperature (°C)', color=temp_color, linestyle=':')
+        ax2.set_ylabel('Temperature (°C)', color=temp_color)
+        ax2.tick_params(axis='y', labelcolor=temp_color)
+        ax2.legend(loc='upper right')
+
+        plt.title('Potential Renewable Generation per MW and Temperature')
         plt.tight_layout()
-        
-        # Save the plot to the dedicated directory
-        plot_filename = f'hourly_supply_profile_month_{month:02d}.png'
-        plot_filepath = os.path.join(monthly_plots_dir, plot_filename)
-        plt.savefig(plot_filepath)
-        plt.close() # Close the plot figure to free memory
-        print(f" - Saved plot: {plot_filepath}")
-
-    print("Finished generating monthly weekly plots.")
-    # --- End of Monthly Plot Generation ---
-
-    # Create monthly energy mix chart
-    monthly_data = supply_profile.copy()
-    monthly_data['month'] = monthly_data['timestamp'].dt.month
-    monthly_summary = monthly_data.groupby('month').agg({
-        'pv_generation': 'sum',
-        'wind_generation': 'sum',
-        'grid_required': 'sum',
-        'demand': 'sum'
-    })
-    
-    # --- Filter summary for plotting --- 
-    # Only include months where renewable generation occurred
-    initial_months = len(monthly_summary)
-    monthly_summary = monthly_summary[monthly_summary['pv_generation'] + monthly_summary['wind_generation'] > 0.1] # Use threshold > 0
-    filtered_months = len(monthly_summary)
-    if initial_months > filtered_months:
-        print(f"Filtering monthly plot: Removed {initial_months - filtered_months} months with zero renewable generation.")
-    # --- End filter --- 
-
-    # Plot monthly energy mix
-    plt.figure(figsize=(14, 8))
-    
-    # Define colors to match previous plots and common conventions
-    colors = {'pv_generation': 'orange', 'wind_generation': 'green', 'grid_required': 'blue'}
-    
-    # Plot the stacked bar chart first using the DataFrame plot method
-    # This generally ensures stack order matches legend order (bottom to top)
-    ax = monthly_summary[['pv_generation', 'wind_generation', 'grid_required']].plot(
-        kind='bar', 
-        stacked=True, 
-        color=[colors['pv_generation'], colors['wind_generation'], colors['grid_required']], 
-        alpha=0.7,
-        figsize=(14, 8) # Specify figsize here for the DataFrame plot
-    )
-    
-    # Plot the demand line on the same axes (ax)
-    monthly_summary['demand'].plot(
-        kind='line', 
-        color='red', 
-        marker='o', 
-        linewidth=2, 
-        label='Demand',
-        ax=ax # Ensure it plots on the same axes
-    )
-    
-    plt.title('Monthly Energy Generation by Source')
-    plt.xlabel('Month')
-    plt.ylabel('Energy (kWh)')
-    
-    # Improve legend placement
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1)) # Place legend outside plot area
-    
-    # Set x-ticks (adjust index based on filtered months if necessary)
-    month_indices = monthly_summary.index.tolist()
-    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    plt.xticks(ticks=range(len(month_indices)), labels=[month_names[i-1] for i in month_indices], rotation=0) # Use filtered indices
-    
-    plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust layout to make space for the legend
-
-    # Save with timestamped filename
-    timestamped_filename = get_timestamped_filename('monthly_energy_mix.png')
-    plt.savefig(os.path.join('figures', timestamped_filename))
-    plt.close()
-    
-    # If temperature data is available, create a temperature vs. demand plot
-    if 'temperature' in energy_data.columns:
-        plt.figure(figsize=(15, 10))
-        
-        # Plot 1: Temperature distribution
-        plt.subplot(2, 2, 1)
-        plt.hist(energy_data['temperature'], bins=20, color='royalblue', alpha=0.7)
-        plt.axvline(x=30, color='red', linestyle='--', label='30°C threshold')
-        plt.title('Temperature Distribution')
-        plt.xlabel('Temperature (°C)')
-        plt.ylabel('Hours')
-        plt.legend()
-        
-        # Plot 2: Temperature vs. Demand Curve
-        plt.subplot(2, 2, 2)
-        
-        # Create temperature bins focused around 30°C threshold
-        temp_bins = np.array([-10, 0, 10, 20, 25, 28, 30, 32, 35, 40, 45])  # Focus more detail around 30°C
-        supply_profile['temp_bin'] = pd.cut(supply_profile['temperature'], bins=temp_bins)
-        
-        # Group data by temperature bins
-        temp_demand = supply_profile.groupby('temp_bin')['demand'].mean()
-        base_demand = hourly_demand_kwh
-        
-        # Plot temperature vs. demand with clear 30°C threshold
-        ax = temp_demand.plot(kind='bar', color='darkred')
-        plt.axhline(y=base_demand, color='black', linestyle='--', label='Base demand')
-        plt.axhline(y=base_demand*1.2, color='red', linestyle='--', label='Base demand +20%')
-        
-        # Add vertical line at 30°C threshold
-        plt.axvline(x=6, color='blue', linestyle='--', label='30°C threshold')  # 6 is the 30°C bin position
-        
-        plt.title('Average Hourly Demand by Temperature Range')
-        plt.xlabel('Temperature Range (°C)')
-        plt.ylabel('Average Demand (kWh)')
-        plt.legend()
-        
-        # Plot 3: Daily temperature and demand profile for a hot week
-        plt.subplot(2, 2, 3)
-        
-        try:
-            # Find a week with high temperatures
-            weekly_temp = supply_profile.set_index('timestamp')['temperature'].resample('W').mean()
-            hot_week_start = weekly_temp.idxmax() - pd.Timedelta(days=3)
-            hot_week = supply_profile[(supply_profile['timestamp'] >= hot_week_start) & 
-                                    (supply_profile['timestamp'] < hot_week_start + pd.Timedelta(days=7))]
-            
-            # Plot temperature and demand for the hot week
-            plt.plot(hot_week['timestamp'], hot_week['temperature'], 'r-', label='Temperature')
-            plt.axhline(y=30, color='r', linestyle='--', alpha=0.7, label='30°C threshold')
-            plt.title(f'Temperature During Hottest Week ({hot_week_start.strftime("%Y-%m-%d")})')
-            plt.ylabel('Temperature (°C)')
-            plt.legend(loc='upper left')
-            
-            # Create second y-axis for demand
-            ax2 = plt.twinx()
-            ax2.plot(hot_week['timestamp'], hot_week['demand'], 'b-', label='Demand')
-            ax2.plot(hot_week['timestamp'], [hourly_demand_kwh] * len(hot_week), 'b--', alpha=0.7, label='Base demand')
-            ax2.set_ylabel('Demand (kWh)')
-            ax2.legend(loc='upper right')
-        except Exception as e:
-            # If there's an error with the hot week data, plot the first week instead
-            print(f"Error plotting hot week: {e}. Using first week instead.")
-            first_week = supply_profile.iloc[:168]  # First week
-            
-            plt.plot(first_week['timestamp'], first_week['temperature'], 'r-', label='Temperature')
-            plt.axhline(y=30, color='r', linestyle='--', alpha=0.7, label='30°C threshold')
-            plt.title('Temperature During First Week')
-            plt.ylabel('Temperature (°C)')
-            plt.legend(loc='upper left')
-            
-            # Create second y-axis for demand
-            ax2 = plt.twinx()
-            ax2.plot(first_week['timestamp'], first_week['demand'], 'b-', label='Demand')
-            ax2.plot(first_week['timestamp'], [hourly_demand_kwh] * len(first_week), 'b--', alpha=0.7, label='Base demand')
-            ax2.set_ylabel('Demand (kWh)')
-            ax2.legend(loc='upper right')
-        
-        # Plot 4: Energy mix by temperature band
-        plt.subplot(2, 2, 4)
-        
-        # Calculate energy mix by temperature band
-        # Use just two temperature bands: ≤30°C and >30°C
-        temp_bins_simple = [-20, 30, 50]  # ≤30°C, >30°C
-        bin_labels = ['≤30°C (Base Demand)', '>30°C (+20% Demand)']
-        supply_profile['temp_category'] = pd.cut(supply_profile['temperature'], bins=temp_bins_simple, labels=bin_labels)
-        
-        # Group data by temperature category
-        temp_energy = supply_profile.groupby('temp_category').agg({
-            'pv_generation': 'sum',
-            'wind_generation': 'sum',
-            'grid_required': 'sum',
-            'demand': 'sum'
-        })
-        
-        # Calculate percentage of demand
-        for col in ['pv_generation', 'wind_generation', 'grid_required']:
-            temp_energy[f'{col}_pct'] = temp_energy[col] / temp_energy['demand'] * 100
-        
-        # Plot stacked bar chart
-        temp_energy[['grid_required_pct', 'wind_generation_pct', 'pv_generation_pct']].plot(
-            kind='bar', stacked=True, 
-            color=['#1E90FF', '#32CD32', '#FFA500'],
-            title='Energy Mix by Temperature Range'
-        )
-        plt.xlabel('Temperature Range')
-        plt.ylabel('Percentage of Demand (%)')
-        plt.legend(['Grid', 'Wind', 'PV'])
-        
-        plt.tight_layout()
-        
-        # Save with timestamped filename
-        timestamped_filename = get_timestamped_filename('temperature_analysis.png')
-        plt.savefig(os.path.join('figures', timestamped_filename))
+        gen_profile_filename = get_timestamped_filename("generation_profiles.png")
+        plt.savefig(os.path.join(figures_dir, "generation_profiles.png"), bbox_inches='tight')
+        print(f"Saved generation profiles plot to figures/generation_profiles.png")
         plt.close()
+    except Exception as e:
+        print(f"Error generating generation profiles plot: {e}")
+
+    # Plot 2: Monthly Energy Mix (Optimal Scenario)
+    try:
+        # Aggregate optimal supply profile by month
+        optimal_supply_profile['month'] = optimal_supply_profile['timestamp'].dt.month
+        monthly_mix = optimal_supply_profile.groupby('month')[[ 'pv_generation', 'wind_generation', 'grid_required', 'demand']].sum() / 1000 # Convert to MWh
         
-        # Create a GWP vs. temperature analysis
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(12, 7))
+        # Stacked bar chart for generation sources
+        plt.bar(monthly_mix.index, monthly_mix['pv_generation'], label='PV Generation', color=pv_color)
+        plt.bar(monthly_mix.index, monthly_mix['wind_generation'], bottom=monthly_mix['pv_generation'], label='Wind Generation', color=wind_color)
+        plt.bar(monthly_mix.index, monthly_mix['grid_required'], bottom=monthly_mix['pv_generation'] + monthly_mix['wind_generation'], label='Grid Required', color=grid_color)
         
-        # Calculate GWP for each hour
-        supply_profile['hourly_gwp'] = (
-            (supply_profile['pv_generation'] * emission_factors['pv']) +
-            (supply_profile['wind_generation'] * emission_factors['wind']) +
-            (supply_profile['grid_required'] * emission_factors['grid'])
-        ) / supply_profile['demand']
+        # Line plot for demand
+        plt.plot(monthly_mix.index, monthly_mix['demand'], label='Demand', color=demand_color, marker='o', linestyle='--')
         
-        # Group by temperature bins
-        gwp_by_temp = supply_profile.groupby('temp_bin')['hourly_gwp'].mean()
-        
-        # Plot GWP vs. temperature
-        gwp_by_temp.plot(kind='bar', color='purple')
-        plt.title('Average GWP by Temperature Range')
-        plt.xlabel('Temperature Range (°C)')
-        plt.ylabel('GWP (kg CO2e/kWh)')
-        
-        # Calculate average GWP
-        avg_gwp = supply_profile['hourly_gwp'].mean()
-        plt.axhline(y=avg_gwp, color='red', linestyle='--', label=f'Overall Average GWP: {avg_gwp:.4f}')
+        plt.xlabel('Month')
+        plt.ylabel('Energy (MWh)')
+        plt.title('Monthly Energy Mix vs. Demand (Optimal Scenario)')
+        plt.xticks(monthly_mix.index)
         plt.legend()
-        
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
-        
-        # Save with timestamped filename
-        timestamped_filename = get_timestamped_filename('gwp_by_temperature.png')
-        plt.savefig(os.path.join('figures', timestamped_filename))
+        monthly_mix_filename = get_timestamped_filename("monthly_energy_mix.png")
+        plt.savefig(os.path.join(figures_dir, "monthly_energy_mix.png"), bbox_inches='tight')
+        print(f"Saved monthly energy mix plot to figures/monthly_energy_mix.png")
         plt.close()
+    except Exception as e:
+        print(f"Error generating monthly energy mix plot: {e}")
+
+    # Plot 3: Optimal Energy Mix (Pie Chart) - Reduce Size
+    try:
+        plt.figure(figsize=(6, 6)) # Reduced size 
+        pv_annual_total = best_mix['pv_annual_total']
+        wind_annual_total = best_mix['wind_annual_total']
+        grid_annual_total = best_mix['grid_annual_total']
+        total_annual_generation = best_mix['total_annual_generation']
+        
+        if total_annual_generation > 0:
+             # Use calculated shares if generation exists
+            labels = ['PV Generation', 'Wind Generation', 'Grid Required']
+            sizes = [pv_annual_total, wind_annual_total, grid_annual_total]
+            colors_pie = [pv_color, wind_color, grid_color] # Define colors list
+            
+            # Filter out zero-value slices for clarity
+            non_zero_elements = [(labels[i], sizes[i], colors_pie[i]) for i, size in enumerate(sizes) if size > 0.001 * total_annual_generation] # Avoid tiny slices
+            
+            if non_zero_elements:
+                 non_zero_labels, non_zero_sizes, non_zero_colors = zip(*non_zero_elements)
+                 plt.pie(non_zero_sizes, labels=non_zero_labels, autopct='%1.1f%%', startangle=90, 
+                         colors=non_zero_colors) # Use filtered colors
+                 plt.title(f'Optimal Energy Mix Contribution\n(Total: {total_annual_generation:,.0f} kWh)')
+            else:
+                 # Handle case where all generation is near zero
+                 plt.text(0.5, 0.5, 'No significant generation', horizontalalignment='center', verticalalignment='center')
+                 plt.title('Optimal Energy Mix Contribution')
+
+        else:
+            # Handle case with zero total generation
+             plt.text(0.5, 0.5, 'Total generation is zero', horizontalalignment='center', verticalalignment='center')
+             plt.title('Optimal Energy Mix Contribution')
+        
+        plt.axis('equal') # Ensure pie is drawn as a circle
+        plt.tight_layout()
+        pie_chart_filename = get_timestamped_filename("optimal_energy_mix.png")
+        plt.savefig(os.path.join(figures_dir, "optimal_energy_mix.png"), bbox_inches='tight')
+        print(f"Saved optimal energy mix pie chart to figures/optimal_energy_mix.png")
+        plt.close()
+    except Exception as e:
+        print(f"Error generating optimal energy mix pie chart: {e}")
+        
+    # Create temperature bins and categories for analysis
+    bins = [-np.inf, 0, 10, 20, 30, np.inf]
+    labels = ['<0°C', '0-10°C', '10-20°C', '20-30°C', '>30°C']
+    optimal_supply_profile['temp_bin'] = pd.cut(optimal_supply_profile['temperature'], bins=bins, labels=labels, right=False)
+    optimal_supply_profile['temp_category'] = optimal_supply_profile['temp_bin'].astype(str) # Use string category for grouping
+
+    # Plot 4: Temperature Analysis - Make Bars Horizontal
+    try:
+        # Ensure 'temperature' and related columns exist
+        if 'temperature' in optimal_supply_profile.columns and 'temp_category' in optimal_supply_profile.columns:
+            fig_temp, axes_temp = plt.subplots(3, 1, figsize=(10, 12), sharex=False) # Keep original figure size for multiple plots
+
+            # Subplot 1: Temperature Distribution (Histogram remains vertical)
+            if not optimal_supply_profile['temperature'].isnull().all():
+                axes_temp[0].hist(optimal_supply_profile['temperature'].dropna(), bins=30, color='skyblue', edgecolor='black')
+                axes_temp[0].set_title('Hourly Temperature Distribution')
+                axes_temp[0].set_xlabel('Temperature (°C)')
+                axes_temp[0].set_ylabel('Number of Hours')
+                axes_temp[0].grid(axis='y', linestyle='--', alpha=0.7)
+            else:
+                axes_temp[0].text(0.5, 0.5, 'No temperature data', horizontalalignment='center', verticalalignment='center')
+                axes_temp[0].set_title('Hourly Temperature Distribution')
+
+            # Subplot 2: Mean Demand by Temperature Category (Horizontal Bar)
+            if 'demand' in optimal_supply_profile.columns:
+                 # Calculate mean demand, ensuring numeric type and handling potential NaNs/Infs
+                 demand_by_temp = optimal_supply_profile.groupby('temp_category')['demand'].mean().replace([np.inf, -np.inf], np.nan).dropna()
+                 # Reorder based on the defined labels for logical presentation
+                 demand_by_temp = demand_by_temp.reindex(labels).dropna()
+                 if not demand_by_temp.empty:
+                     axes_temp[1].barh(demand_by_temp.index, demand_by_temp.values, color='lightcoral') # Use barh
+                     axes_temp[1].set_title('Mean Hourly Demand by Temperature Category')
+                     axes_temp[1].set_xlabel('Average Demand (kWh)') # Swapped label
+                     axes_temp[1].set_ylabel('Temperature Category') # Swapped label
+                     axes_temp[1].grid(axis='x', linestyle='--', alpha=0.7) # Grid on value axis
+                 else:
+                    axes_temp[1].text(0.5, 0.5, 'No demand data or categories', horizontalalignment='center', verticalalignment='center')
+                    axes_temp[1].set_title('Mean Hourly Demand by Temperature Category')
+
+            # Subplot 3: Mean Grid Use by Temperature Category (Horizontal Bar)
+            if 'grid_required' in optimal_supply_profile.columns:
+                 # Calculate mean grid use, ensuring numeric type and handling potential NaNs/Infs
+                 grid_by_temp = optimal_supply_profile.groupby('temp_category')['grid_required'].mean().replace([np.inf, -np.inf], np.nan).dropna()
+                 # Reorder based on the defined labels
+                 grid_by_temp = grid_by_temp.reindex(labels).dropna()
+                 if not grid_by_temp.empty:
+                     axes_temp[2].barh(grid_by_temp.index, grid_by_temp.values, color=grid_color) # Use barh and consistent color
+                     axes_temp[2].set_title('Mean Hourly Grid Requirement by Temperature Category')
+                     axes_temp[2].set_xlabel('Average Grid Required (kWh)') # Swapped label
+                     axes_temp[2].set_ylabel('Temperature Category') # Swapped label
+                     axes_temp[2].grid(axis='x', linestyle='--', alpha=0.7) # Grid on value axis
+                 else:
+                    axes_temp[2].text(0.5, 0.5, 'No grid data or categories', horizontalalignment='center', verticalalignment='center')
+                    axes_temp[2].set_title('Mean Hourly Grid Requirement by Temperature Category')
+
+
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout
+            temp_analysis_filename = get_timestamped_filename("temperature_analysis.png")
+            plt.savefig(os.path.join(figures_dir, "temperature_analysis.png"), bbox_inches='tight')
+            print(f"Saved temperature analysis plot to figures/temperature_analysis.png")
+            plt.close()
+        else:
+             print("Skipping temperature analysis plot due to missing columns.")
+             
+    except Exception as e:
+        print(f"Error generating temperature analysis plot: {e}")
+
+
+    # Plot 5: GWP by Temperature Range - Horizontal Ticks
+    try:
+        # Ensure necessary columns exist
+        if 'hourly_gwp' in optimal_supply_profile.columns and 'temp_bin' in optimal_supply_profile.columns:
+            # Calculate mean GWP per bin, handling potential NaNs/Infs
+             gwp_by_temp = optimal_supply_profile.groupby('temp_bin')['hourly_gwp'].mean().replace([np.inf, -np.inf], np.nan).dropna()
+             # Reorder based on defined labels
+             gwp_by_temp = gwp_by_temp.reindex(labels).dropna()
+             
+             if not gwp_by_temp.empty:
+                plt.figure(figsize=(10, 6))
+                # Use the ordered index for plotting
+                bars = plt.barh(gwp_by_temp.index, gwp_by_temp.values, color='purple')
+                plt.ylabel('Temperature Range (°C)')
+                plt.xlabel('Average GWP (kg CO2e/kWh)')
+                plt.title('Average GWP by Temperature Range')
+                plt.grid(axis='x', linestyle='--', alpha=0.7)
+                plt.tight_layout()
+                gwp_temp_filename = get_timestamped_filename("gwp_by_temperature.png")
+                plt.savefig(os.path.join(figures_dir, "gwp_by_temperature.png"), bbox_inches='tight')
+                print(f"Saved GWP by temperature plot to figures/gwp_by_temperature.png")
+                plt.close()
+             else:
+                print("Skipping GWP by temperature plot: No valid GWP data per temperature bin.")
+
+        else:
+             print("Skipping GWP by temperature plot due to missing columns.")
+
+    except Exception as e:
+        print(f"Error generating GWP by temperature plot: {e}")
+
+
+    # Plot 6: Monthly First Week Hourly Profiles
+    try:
+        print("Generating weekly profile plots for each month...")
+        # Get unique months present in the data
+        months = sorted(optimal_supply_profile['timestamp'].dt.month.unique())
+        
+        for month in months:
+            # Filter data for the first 7 days of the month
+            start_of_month = optimal_supply_profile['timestamp'].min().replace(day=1, month=month)
+            end_of_week = start_of_month + timedelta(days=7)
+            weekly_data = optimal_supply_profile[
+                (optimal_supply_profile['timestamp'] >= start_of_month) & 
+                (optimal_supply_profile['timestamp'] < end_of_week)
+            ]
+            
+            if weekly_data.empty:
+                print(f"  Skipping month {month:02d}: No data for the first week.")
+                continue
+
+            plt.figure(figsize=(15, 7))
+            
+            # Stacked area plot for generation components
+            plt.stackplot(weekly_data['timestamp'], 
+                          weekly_data['pv_generation'], 
+                          weekly_data['wind_generation'], 
+                          weekly_data['grid_required'], 
+                          labels=['PV', 'Wind', 'Grid'], 
+                          colors=[pv_color, wind_color, grid_color],
+                          alpha=0.7)
+            
+            # Line plot for demand
+            plt.plot(weekly_data['timestamp'], weekly_data['demand'], label='Demand', color=demand_color, linestyle='--', linewidth=2)
+            
+            plt.xlabel('Date and Time')
+            plt.ylabel('Energy (kWh)')
+            plt.title(f'Hourly Supply vs. Demand - First Week of Month {month:02d}')
+            plt.legend(loc='upper right')
+            plt.grid(True, linestyle='--', alpha=0.5)
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            # Save the plot
+            week_plot_filename = get_timestamped_filename(f"hourly_supply_profile_month_{month:02d}.png")
+            plt.savefig(os.path.join(figures_dir, 'monthly_first_week_profiles', f"hourly_supply_profile_month_{month:02d}.png"), bbox_inches='tight')
+            print(f"  Saved weekly profile for month {month:02d} to figures/monthly_first_week_profiles/")
+            plt.close()
+            
+    except Exception as e:
+        print(f"Error generating weekly profile plots: {e}")
+
+    print("Plot generation complete.")
     
     # Clean up the best_mix dictionary before returning
     best_mix.pop('pv_hourly', None)
     best_mix.pop('wind_hourly', None)
     best_mix.pop('grid_hourly', None)
     best_mix.pop('demand_hourly', None)
+    best_mix.pop('battery_soc_hourly', None)
+    best_mix.pop('battery_charge_hourly', None)
+    best_mix.pop('battery_discharge_hourly', None)
+    best_mix.pop('curtailment_hourly', None)
     
     return best_mix
 
 def main():
     # Debug print
     print("Starting optimization script...")
+
+    # --- Apply Publication Formatting Settings --- 
+    plt.rcParams.update({
+        "font.size": 12,          # Base font size
+        "font.family": "serif",   # Or "sans-serif"
+        "font.serif": ["Times New Roman"], # Specific serif font
+        # "font.sans-serif": ["Arial"],    # Specific sans-serif font
+        "axes.labelsize": 14,     # Fontsize of the x and y labels
+        "axes.titlesize": 16,     # Fontsize of the axes title
+        "xtick.labelsize": 12,    # Fontsize of the tick labels
+        "ytick.labelsize": 12,    # Fontsize of the tick labels
+        "legend.fontsize": 12,    # Legend fontsize
+        "figure.titlesize": 18,   # Fontsize of the figure title
+        "lines.linewidth": 2,     # Line width
+        "lines.markersize": 6,    # Marker size
+        "figure.dpi": 300,        # Figure resolution
+        "savefig.dpi": 300,       # Resolution for saved figures
+        "savefig.format": 'png',  # Default save format (use png for compatibility, pdf also good)
+        "savefig.bbox": 'tight',  # Tight bounding box
+        "axes.spines.top": False, # Remove top spine
+        "axes.spines.right": False # Remove right spine
+    })
+    print("Applied publication-ready formatting settings.")
 
     # --- Clean up / Archiving removed (Strategy 1: Fixed Filenames) ---
     
@@ -1190,25 +1108,115 @@ def main():
         return # Exit if no data
     # --- End check ---
 
-    # Save the generated data
-    save_data_to_csv(energy_data, 'australian_energy_data.csv')
+    # Save the generated data (potentials per MW)
+    save_data_to_csv(energy_data, 'australian_energy_data_potentials.csv') # Rename to reflect content
     
     # Display location information if available
     if 'location' in energy_data.columns:
         print(f"\nAnalysis based on data from: {energy_data['location'].iloc[0]}")
+
+    # --- Get User Input for Annual Demand ---
+    while True:
+        try:
+            user_demand_mwh = float(input("Enter the target annual energy demand in MWh (e.g., 40): "))
+            if user_demand_mwh > 0:
+                break
+            else:
+                print("Demand must be a positive number.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+
+    print(f"Using target annual demand: {user_demand_mwh} MWh")
+
+    # --- Calculate Dynamic Capacity Search Ranges ---
+    print("\nCalculating dynamic search ranges for PV and Wind capacities...")
     
-    # Plot generation profiles
+    # Constants
+    pv_land_per_mw = 0.02
+    wind_land_per_mw = 0.26
+    available_land_km2 = 1000 # Increased land area
+    min_search_range_mw = 50  # Minimum capacity (MW) to search up to
+    demand_headroom_factor = 1.5 # Multiplier for estimated capacity needed
+    num_capacity_steps = 30 # Number of steps for linspace
+
+    # Calculate average capacity factors from site data
+    avg_pv_cf = energy_data['pv_potential_per_mw'].mean()
+    avg_wind_cf = energy_data['wind_potential_per_mw'].mean()
+    # Use a small floor value to avoid division by zero for sites with no potential
+    avg_pv_cf = max(avg_pv_cf, 0.01) 
+    avg_wind_cf = max(avg_wind_cf, 0.01)
+    print(f"  Average site potential (Capacity Factor estimate): PV={avg_pv_cf:.3f}, Wind={avg_wind_cf:.3f}")
+
+    # Calculate max capacities based purely on land limit
+    max_pv_from_land = available_land_km2 / pv_land_per_mw
+    max_wind_from_land = available_land_km2 / wind_land_per_mw
+    print(f"  Max capacity purely from land: PV={max_pv_from_land:.1f} MW, Wind={max_wind_from_land:.1f} MW")
+
+    # Calculate average hourly demand in kW
+    avg_hourly_demand_kw = (user_demand_mwh * 1000) / len(energy_data)
+
+    # Estimate capacities needed if each tech met the entire demand
+    estimated_pv_cap_for_demand = avg_hourly_demand_kw / avg_pv_cf
+    estimated_wind_cap_for_demand = avg_hourly_demand_kw / avg_wind_cf
+    print(f"  Estimated capacity to meet demand individually: PV={estimated_pv_cap_for_demand:.1f} MW, Wind={estimated_wind_cap_for_demand:.1f} MW")
+
+    # Calculate the dynamic upper bound for the search range
+    pv_search_upper_bound = max(min_search_range_mw, min(max_pv_from_land, demand_headroom_factor * estimated_pv_cap_for_demand))
+    wind_search_upper_bound = max(min_search_range_mw, min(max_wind_from_land, demand_headroom_factor * estimated_wind_cap_for_demand))
+    
+    print(f"  Using dynamic search upper bounds: PV={pv_search_upper_bound:.1f} MW, Wind={wind_search_upper_bound:.1f} MW")
+
+    # Create the dynamic capacity arrays
+    pv_capacities_dynamic = np.linspace(0, pv_search_upper_bound, num_capacity_steps)
+    wind_capacities_dynamic = np.linspace(0, wind_search_upper_bound, num_capacity_steps)
+
+    # --- Run Optimization First ---
+    print(f"\nOptimizing energy mix for {user_demand_mwh} MWh annual demand with {available_land_km2} km² available land:")
+    print("-" * 80)
+
+    # Run the land use optimization using user input and dynamic ranges
+    # Note: ensure energy_data has 'pv_potential_per_mw' and 'wind_potential_per_mw' columns
+    optimal_mix = optimise_land_use(
+        energy_data,
+        annual_demand_mwh=user_demand_mwh, # Use user input
+        available_land_km2=available_land_km2,
+        pv_land_per_mw=pv_land_per_mw,
+        wind_land_per_mw=wind_land_per_mw,
+        # --- Pass updated GWP factors ---
+        pv_gwp=0.07, 
+        wind_gwp=0.011, 
+        grid_gwp=0.6,
+        # --- Use dynamic capacity search ranges ---
+        pv_capacities=pv_capacities_dynamic, 
+        wind_capacities=wind_capacities_dynamic 
+    )
+
+    # Check if optimization was successful before proceeding
+    if optimal_mix.get("error"):
+        print(f"Optimization failed: {optimal_mix['error']}")
+        return # Exit if optimization failed
+    if optimal_mix['pv_capacity'] < 0 or optimal_mix['wind_capacity'] < 0:
+        print("Optimization did not find a valid positive capacity mix.")
+        return # Exit if optimization failed
+
+    # --- Plotting for the Optimal System ---
+    print("\nGenerating plot for the optimal system generation profiles...")
+    
+    # Calculate optimal generation based on returned capacities
+    optimal_pv_gen = energy_data['pv_potential_per_mw'] * optimal_mix['pv_capacity']
+    optimal_wind_gen = energy_data['wind_potential_per_mw'] * optimal_mix['wind_capacity']
+    
     plt.figure(figsize=(15, 10))
     
     plt.subplot(3, 1, 1)
-    plt.plot(energy_data['timestamp'], energy_data['pv_generation'])
-    plt.title('PV Generation')
-    plt.ylabel('kWh')
+    plt.plot(energy_data['timestamp'], optimal_pv_gen)
+    plt.title(f"Optimal PV Generation ({optimal_mix['pv_capacity']:.2f} MW)")
+    plt.ylabel('kWh') # Use kWh
     
     plt.subplot(3, 1, 2)
-    plt.plot(energy_data['timestamp'], energy_data['wind_generation'])
-    plt.title('Wind Generation')
-    plt.ylabel('kWh')
+    plt.plot(energy_data['timestamp'], optimal_wind_gen)
+    plt.title(f"Optimal Wind Generation ({optimal_mix['wind_capacity']:.2f} MW)")
+    plt.ylabel('kWh') # Use kWh
     
     plt.subplot(3, 1, 3)
     plt.plot(energy_data['timestamp'], energy_data['temperature'])
@@ -1219,36 +1227,30 @@ def main():
     
     plt.tight_layout()
     
-    # Save with timestamped filename
-    timestamped_filename = get_timestamped_filename('generation_profiles.png')
-    plt.savefig(os.path.join('figures', timestamped_filename))
+    # Save the optimal system plot
+    optimal_plot_filename = get_timestamped_filename('optimal_system_profiles.png') # New filename
+    plt.savefig(os.path.join('figures', optimal_plot_filename))
     plt.close()
+    print(f"Saved optimal system profiles plot to figures/{optimal_plot_filename}")
     
-    # New section: Calculate optimal land use for 40 MWh annual demand with 50 km² available land
-    print("\nOptimizing energy mix for 40 MWh annual demand with 50 km² available land:")
-    print("-" * 80)
-    
-    # Run the land use optimization
-    optimal_mix = optimise_land_use(energy_data, 40, 50)
-    
-    # Print the results
+    # --- Print Optimization Results --- 
     print("\n" + "="*80)
     print("OPTIMAL ENERGY MIX SOLUTION")
     print("="*80)
-    print(f"Optimal PV capacity: {optimal_mix['pv_capacity_mw']:.2f} MW using {optimal_mix['pv_land_km2']:.2f} km²")
-    print(f"Optimal wind capacity: {optimal_mix['wind_capacity_mw']:.2f} MW using {optimal_mix['wind_land_km2']:.2f} km²")
-    print(f"Total land usage: {optimal_mix['total_land_km2']:.2f} km² of {50:.2f} km² available")
+    print(f"Optimal PV capacity: {optimal_mix['pv_capacity']:.2f} MW using {optimal_mix['pv_land']:.2f} km²")
+    print(f"Optimal wind capacity: {optimal_mix['wind_capacity']:.2f} MW using {optimal_mix['wind_land']:.2f} km²")
+    print(f"Total land usage: {optimal_mix['land_used']:.2f} km² of {1000:.2f} km² available")
     print("\nEnergy mix:")
-    print(f"PV generation: {optimal_mix['pv_annual_mwh']:.2f} MWh/year ({optimal_mix['pv_percentage']:.1f}%)")
-    print(f"Wind generation: {optimal_mix['wind_annual_mwh']:.2f} MWh/year ({optimal_mix['wind_percentage']:.1f}%)")
-    print(f"Grid usage: {optimal_mix['grid_annual_mwh']:.2f} MWh/year ({optimal_mix['grid_percentage']:.1f}%)")
-    print(f"Total annual generation: {optimal_mix.get('total_annual_mwh', optimal_mix['pv_annual_mwh'] + optimal_mix['wind_annual_mwh'] + optimal_mix['grid_annual_mwh']):.2f} MWh/year")
+    print(f"PV generation: {optimal_mix['pv_annual_total']/1000:.2f} MWh/year ({optimal_mix['pv_share']:.1f}%)")
+    print(f"Wind generation: {optimal_mix['wind_annual_total']/1000:.2f} MWh/year ({optimal_mix['wind_share']:.1f}%)")
+    print(f"Grid usage: {optimal_mix['grid_annual_total']/1000:.2f} MWh/year ({optimal_mix['grid_share']:.1f}%)")
+    print(f"Total annual generation: {optimal_mix['total_annual_generation']/1000:.2f} MWh/year")
     
     print(f"\nGlobal Warming Potential: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
     
     print("\nStability analysis:")
-    print(f"Hours with renewable generation deficit: {optimal_mix['hours_with_deficit']} of {len(energy_data)} ({optimal_mix['deficit_percentage']:.1f}%)")
-    print(f"Maximum hourly deficit: {optimal_mix['max_hourly_deficit_kwh']:.2f} kWh")
+    print(f"Hours with renewable generation deficit: {optimal_mix['grid_deficit_hours']} of {len(energy_data)} ({optimal_mix['grid_deficit_percentage']:.1f}%)")
+    print(f"Maximum hourly deficit: {optimal_mix['max_hourly_deficit']:.2f} kWh")
     
     print("\nOutput files created:")
     print("- data/optimal_supply_profile.csv - Hourly generation data")
@@ -1260,14 +1262,14 @@ def main():
     
     # Create visualization of the optimal mix
     labels = ['PV', 'Wind', 'Grid']
-    sizes = [optimal_mix['pv_percentage'], optimal_mix['wind_percentage'], optimal_mix['grid_percentage']]
+    sizes = [optimal_mix['pv_share'], optimal_mix['wind_share'], optimal_mix['grid_share']]
     colours = ['#FFA500', '#32CD32', '#1E90FF']
     explode = (0.1, 0.1, 0)
     
     plt.figure(figsize=(10, 7))
     plt.pie(sizes, explode=explode, labels=labels, colors=colours, autopct='%1.1f%%', startangle=140)
     plt.axis('equal')
-    plt.title(f"Optimal Energy Mix for 40 MWh Annual Demand\nTotal GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
+    plt.title(f"Optimal Energy Mix for {user_demand_mwh} MWh Annual Demand\nTotal GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
     
     # Save with timestamped filename
     timestamped_filename = get_timestamped_filename('optimal_energy_mix.png')
@@ -1299,11 +1301,51 @@ def generate_location_data(location_name, latitude, longitude, start_date, end_d
             print(f"NASA POWER data fetch for {location_name} returned empty dataset")
     except Exception as e:
         print(f"Error processing NASA POWER data for {location_name}: {e}")
-        import traceback
         traceback.print_exc()
     
     print(f"Unable to fetch real data for {location_name}, returning None")
     return None, False
+
+# --- Restored Functions --- 
+
+def get_timestamped_filename(filename):
+    """
+    Returns the original filename without adding a timestamp.
+    (Strategy 1: Fixed Filenames)
+    """
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # name, ext = os.path.splitext(filename)
+    # return f"{name}_{timestamp}{ext}"
+    return filename # Return the original filename
+
+def save_data_to_csv(data, filename):
+    """
+    Save the data to a CSV file in the output_data directory
+    """
+    # Ensure the output_data directory exists
+    output_dir = 'output_data' # Define base directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Get the filename (potentially timestamped, but currently not)
+    processed_filename = get_timestamped_filename(filename)
+    
+    # Create the full path
+    filepath = os.path.join(output_dir, processed_filename)
+    
+    # Save the data
+    data.to_csv(filepath, index=False)
+    print(f"Data saved to {filepath}")
+    
+    # Print some basic statistics (commented out as columns may not exist)
+    # print("\nData Statistics:")
+    # print(f"Total records: {len(data)}")
+    # if 'timestamp' in data.columns:
+    #      print(f"Time period: {data['timestamp'].min()} to {data['timestamp'].max()}")
+    # # print(f"Average PV generation: {data['pv_generation'].mean():.2f} kWh") # Column removed
+    # # print(f"Average wind generation: {data['wind_generation'].mean():.2f} kWh") # Column removed
+    # # print(f"Average total generation: {data['total_generation'].mean():.2f} kWh") # Column removed
+
+# --- End Restored Functions ---
 
 if __name__ == "__main__":
     main() 
