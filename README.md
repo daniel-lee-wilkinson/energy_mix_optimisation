@@ -1,6 +1,6 @@
-# Energy Mix Optimization Project
+# Energy Mix Optimisation Project
 
-This project performs energy mix optimization analysis for renewable energy sources.
+This project performs energy mix optimisation analysis for renewable energy sources.
 
 ## Project Structure
 
@@ -8,7 +8,7 @@ This project performs energy mix optimization analysis for renewable energy sour
 project/
 │
 ├── src/                  # Source code directory
-│   └── energy_mix_optimization_*.py  # Main optimization script
+│   └── energy_mix_optimisation_*.py  # Main optimisation script
 │
 ├── figures/              # Contains latest figures/plots
 │   ├── monthly_first_week_profiles/ # Contains latest weekly profiles
@@ -36,19 +36,19 @@ Output files (figures and data) are saved with fixed names in their respective d
 
 1. Create a Python virtual environment (recommended).
 2. Install the dependencies: `pip install -r requirements.txt`
-3. Run the optimization script:
+3. Run the optimisation script:
    ```bash
    python run_optimization.py
    ```
-   *Note:* This command executes the `run_optimization.py` script, which automatically finds and runs the most recent `energy_mix_optimization_*.py` file located in the `src/` directory. This ensures you are always using the latest version of the core logic. If you need to run a specific older version, you can execute its corresponding `src/energy_mix_optimization_YYYYMMDD_HHMMSS.py` file directly.
+   *Note:* This command executes the `run_optimization.py` script, which automatically finds and runs the most recent `energy_mix_optimisation_*.py` file located in the `src/` directory. This ensures you are always using the latest version of the core logic. If you need to run a specific older version, you can execute its corresponding `src/energy_mix_optimisation_YYYYMMDD_HHMMSS.py` file directly.
 
 ## Features
 
 - Fetches real weather data from NASA POWER API
-- Calculates optimal energy mix to minimize global warming potential
-- Analyzes temperature effects on energy demand
-- Optimizes land use for PV and wind installations
-- Creates visualizations of energy generation profiles and optimization results 
+- Calculates optimal energy mix to minimise global warming potential
+- Analyses temperature effects on energy demand
+- Optimises land use for PV and wind installations
+- Creates visualisations of energy generation profiles and optimisation results 
 
 ## Data Sources
 
@@ -83,14 +83,14 @@ The model and analysis rely on the following key assumptions:
 *   **GWP:** Assumed to be 0.65 kg CO2e per kWh (representative value for South Australia, may vary).
 
 **Energy Demand:**
-*   **Annual Target:** The `annual_demand_mwh` value provided (e.g., 40 MWh in `main`) represents the *target total annual energy demand* that the optimized mix must meet.
-*   **Hourly Profile Shaping:** An initial hourly demand profile is created by calculating a base average hourly demand from the annual target and then applying a temperature adjustment (increasing demand by 20% during hours > 30°C).
+*   **Annual Target:** The `annual_demand_mwh` value provided (e.g., 40 MWh in `main`) represents the *target total annual energy demand* that the optimised mix must meet.
+*   **Temperature Adjustment:** Base hourly demand is increased by 20% during hours when the ambient temperature exceeds 30°C.
 *   **Scaling:** This initial hourly profile is then scaled proportionally (up or down) so that the sum of hourly demands over the entire year exactly matches the specified `annual_demand_mwh` target.
 
-**Optimization (`optimize_land_use` function):**
-*   **Objective:** Minimize the overall Global Warming Potential (GWP) of the energy mix (PV, Wind, Grid).
+**Optimisation (`optimise_land_use` function):**
+*   **Objective:** Minimise the overall Global Warming Potential (GWP) of the energy mix (PV, Wind, Grid).
 *   **Primary Constraints:** Total land use must not exceed available land (e.g., 50 km² in `main`), and the total annual energy generated must meet the specified annual demand.
-*   **Method:** Uses a grid search over a predefined range of potential PV and Wind capacities (0-50 MW each in 20 steps by default) to find the combination that minimizes GWP while satisfying constraints.
+*   **Method:** Uses a grid search over a predefined range of potential PV and Wind capacities (0-50 MW each in 20 steps by default) to find the combination that minimises GWP while satisfying constraints.
 
 **Plotting:**
 *   **Weekly Profiles:** Smoothed using a 6-hour rolling average.
@@ -114,10 +114,10 @@ The script generates CSV data files and PNG image files.
 
 **Data Files (in `output_data/`):**
 *   `australian_energy_data.csv`:
-    *   Contains the processed hourly weather and *potential* generation data for the entire analysis period, *before* optimization.
+    *   Contains the processed hourly weather and *potential* generation data for the entire analysis period, *before* optimisation.
     *   Columns: `timestamp`, `solar_irradiation`, `wind_speed`, `temperature`, `pv_generation` (potential per MW), `wind_generation` (potential per MW), `total_generation` (potential PV+Wind), `month`, `hour`, `season`, `location`.
 *   `optimal_supply_profile.csv`:
-    *   Contains the hourly demand and generation profile for the *optimal* PV/Wind capacity mix determined by the `optimize_land_use` function.
+    *   Contains the hourly demand and generation profile for the *optimal* PV/Wind capacity mix determined by the `optimise_land_use` function.
     *   Columns: `timestamp`, `pv_generation` (actual kWh for optimal capacity), `wind_generation` (actual kWh), `renewable_total`, `demand` (adjusted), `grid_required`, `temperature`, `temp_bin`, `temp_category`, `hourly_gwp`.
 
 **Figure Files (in `figures/`):**

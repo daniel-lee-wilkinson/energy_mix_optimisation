@@ -2,7 +2,7 @@
 
 ## 1. Project Goal
 
-The primary goal of this project is to determine an optimal mix of photovoltaic (PV) solar power, wind power, and grid electricity supply to meet a specified annual energy demand for a given location (primarily Moomba, South Australia). The optimization aims to minimize the overall Global Warming Potential (GWP) associated with the energy generation mix, subject to a constraint on the total available land area for PV and wind installations.
+The primary goal of this project is to determine an optimal mix of photovoltaic (PV) solar power, wind power, and grid electricity supply to meet a specified annual energy demand for a given location (given the example of Moomba, South Australia). The optimization aims to minimize the overall Global Warming Potential (GWP) associated with the energy generation mix, subject to a constraint on the total available land area for PV and wind installations.
 
 ## 2. Key Questions Addressed
 

@@ -240,8 +240,8 @@ def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
         else:
             # Correct cubic relationship between wind speed and power
             # The correct formula applies the cube to just the wind speed, not to the entire ratio
-            normalized_speed = (speed - cut_in_speed) / (rated_speed - cut_in_speed)
-            return wind_capacity * normalized_speed ** 3
+            normalised_speed = (speed - cut_in_speed) / (rated_speed - cut_in_speed)
+            return wind_capacity * normalised_speed ** 3
     
     weather_data['wind_generation'] = weather_data['wind_speed'].apply(wind_power_curve)
     
@@ -390,9 +390,9 @@ def calculate_gwp(energy_mix, emission_factors):
     """
     return np.sum(energy_mix * emission_factors)
 
-def optimize_energy_mix(energy_data, demand, capacity_constraints, emission_factors):
+def optimise_energy_mix(energy_data, demand, capacity_constraints, emission_factors):
     """
-    Optimize the energy mix to minimize global warming potential
+    Optimise the energy mix to minimise global warming potential
     """
     # Initial guess (equal distribution)
     x0 = np.array([0.2, 0.4, 0.4])  # Start with maximum PV and wind
@@ -416,7 +416,7 @@ def optimize_energy_mix(energy_data, demand, capacity_constraints, emission_fact
         (0, capacity_constraints['wind'])
     ]
     
-    # Objective function to minimize
+    # Objective function to minimise
     def objective(x):
         total_emissions = (
             x[0] * emission_factors['grid'] +
@@ -425,7 +425,7 @@ def optimize_energy_mix(energy_data, demand, capacity_constraints, emission_fact
         )
         return total_emissions
     
-    # Perform optimization
+    # Perform optimisation
     result = minimize(
         objective,
         x0,
@@ -436,7 +436,7 @@ def optimize_energy_mix(energy_data, demand, capacity_constraints, emission_fact
     )
     
     if not result.success:
-        print(f"Warning: Optimization may not have converged. Message: {result.message}")
+        print(f"Warning: Optimisation may not have converged. Message: {result.message}")
     
     return result.x
 
@@ -477,7 +477,7 @@ def plot_demand_sensitivity(energy_data, capacity_constraints, emission_factors,
     
     for demand in demand_values:
         try:
-            optimal_mix = optimize_energy_mix(energy_data, demand, capacity_constraints, emission_factors)
+            optimal_mix = optimise_energy_mix(energy_data, demand, capacity_constraints, emission_factors)
             grid_shares.append(optimal_mix[0] * 100)
             pv_shares.append(optimal_mix[1] * 100)
             wind_shares.append(optimal_mix[2] * 100)
@@ -583,9 +583,9 @@ def calculate_temperature_adjusted_demand(base_demand, temperature):
     # Return adjusted demand
     return base_demand * adjustment
 
-def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
+def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2):
     """
-    Optimize PV and wind installation to minimize GWP with land constraint
+    Optimise PV and wind installation to minimise GWP with land constraint
     
     Parameters:
     -----------
@@ -630,7 +630,7 @@ def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
         print(f" - Scaling factor applied: {scaling_factor:.4f}")
         print(f" - Final profile total: {adjusted_hourly_demand.sum() / 1000:.2f} MWh/year")
         
-        # --- Summarize temperature effects based on the *final* scaled profile ---
+        # --- Summarise temperature effects based on the *final* scaled profile ---
         print(f"\nTemperature effects on *scaled* demand (base: {hourly_demand_kwh:.2f} kWh/hour average):")
         # Create temperature band analysis
         temp_bands = [(float('-inf'), 0), (0, 5), (5, 10), (10, 15), (15, 20), (20, 25), 
@@ -700,7 +700,7 @@ def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
     print(f"Max wind capacity with available land: {max_wind_capacity:.2f} MW")
     
     # We'll use a grid search approach to find the optimal mix
-    # This is more reliable than optimization for this specific problem
+    # This is more reliable than optimisation for this specific problem
     
     # Define the grid for PV and wind capacities
     # We'll use a smaller number of points to speed up the search
@@ -1229,7 +1229,7 @@ def main():
     print("-" * 80)
     
     # Run the land use optimization
-    optimal_mix = optimize_land_use(energy_data, 40, 50)
+    optimal_mix = optimise_land_use(energy_data, 40, 50)
     
     # Print the results
     print("\n" + "="*80)
@@ -1261,11 +1261,11 @@ def main():
     # Create visualization of the optimal mix
     labels = ['PV', 'Wind', 'Grid']
     sizes = [optimal_mix['pv_percentage'], optimal_mix['wind_percentage'], optimal_mix['grid_percentage']]
-    colors = ['#FFA500', '#32CD32', '#1E90FF']
+    colours = ['#FFA500', '#32CD32', '#1E90FF']
     explode = (0.1, 0.1, 0)
     
     plt.figure(figsize=(10, 7))
-    plt.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140)
+    plt.pie(sizes, explode=explode, labels=labels, colors=colours, autopct='%1.1f%%', startangle=140)
     plt.axis('equal')
     plt.title(f"Optimal Energy Mix for 40 MWh Annual Demand\nTotal GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
     

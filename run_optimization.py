@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Run script for the energy mix optimization project
-This script imports and runs the main function from the latest version of the optimization script
+Run script for the energy mix optimisation project
+This script imports and runs the main function from the latest version of the optimisation script
 """
 
 import os
@@ -11,12 +11,12 @@ import sys
 from datetime import datetime
 
 def find_latest_script():
-    """Find the latest optimization script in the src directory"""
-    # Get all optimization scripts
-    scripts = glob.glob('src/energy_mix_optimization_*.py')
+    """Find the latest optimisation script in the src directory"""
+    # Get all optimisation scripts
+    scripts = glob.glob('src/energy_mix_optimisation_*.py')
     
     if not scripts:
-        print("Error: No optimization scripts found in src directory")
+        print("Error: No optimisation scripts found in src directory")
         sys.exit(1)
     
     # Sort by modification time (newest first)
@@ -38,9 +38,9 @@ def import_and_run():
     spec.loader.exec_module(module)
     
     # Run the main function
-    print(f"Starting optimization at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Starting optimisation at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     module.main()
-    print(f"Optimization completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Optimisation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
     import_and_run() 
