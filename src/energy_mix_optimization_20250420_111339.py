@@ -334,7 +334,8 @@ def generate_synthetic_data(start_date, end_date, latitude, longitude):
 
 def get_timestamped_filename(filename):
     """
-    Add a timestamp to a filename
+    Returns the original filename without adding a timestamp.
+    (Timestamping disabled for Strategy 1: Fixed Filenames)
     
     Parameters:
     -----------
@@ -344,11 +345,12 @@ def get_timestamped_filename(filename):
     Returns:
     --------
     str
-        Filename with timestamp inserted before the extension
+        The original filename
     """
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    name, ext = os.path.splitext(filename)
-    return f"{name}_{timestamp}{ext}"
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # name, ext = os.path.splitext(filename)
+    # return f"{name}_{timestamp}{ext}"
+    return filename # Return the original filename
 
 def save_data_to_csv(data, filename):
     """
@@ -1113,62 +1115,15 @@ def main():
     # Debug print
     print("Starting optimization script...")
 
-    # --- Archive previous run's output --- 
-    print("Archiving previous run's output files...")
+    # --- Clean up / Archiving removed (Strategy 1: Fixed Filenames) ---
     
-    # Define directories
+    # Ensure base directories exist (still needed)
     figures_dir = 'figures'
-    figures_old_dir = os.path.join(figures_dir, 'old')
     data_dir = 'output_data'
-    data_old_dir = os.path.join(data_dir, 'old')
-    monthly_profiles_dir = os.path.join(figures_dir, 'monthly_first_week_profiles') # Also handle this special dir
-    monthly_profiles_old_dir = os.path.join(figures_old_dir, 'monthly_first_week_profiles')
-
-    # Ensure base and old directories exist
+    monthly_profiles_dir = os.path.join(figures_dir, 'monthly_first_week_profiles')
     os.makedirs(figures_dir, exist_ok=True)
-    os.makedirs(figures_old_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
-    os.makedirs(data_old_dir, exist_ok=True)
-    os.makedirs(monthly_profiles_dir, exist_ok=True) # Need this for plots
-    os.makedirs(monthly_profiles_old_dir, exist_ok=True) # Create nested old dir
-
-    # Archive figures/*.png
-    try:
-        for filename in os.listdir(figures_dir):
-            source_path = os.path.join(figures_dir, filename)
-            # Check if it's a PNG file and not a directory
-            if filename.lower().endswith('.png') and os.path.isfile(source_path):
-                dest_path = os.path.join(figures_old_dir, filename)
-                print(f" - Archiving figure: {filename}")
-                shutil.move(source_path, dest_path)
-    except Exception as e:
-        print(f"Warning: Could not archive figures: {e}")
-
-    # Archive figures/monthly_first_week_profiles/*.png
-    if os.path.exists(monthly_profiles_dir):
-        try:
-            for filename in os.listdir(monthly_profiles_dir):
-                source_path = os.path.join(monthly_profiles_dir, filename)
-                if filename.lower().endswith('.png') and os.path.isfile(source_path):
-                    dest_path = os.path.join(monthly_profiles_old_dir, filename)
-                    print(f" - Archiving monthly profile: {filename}")
-                    shutil.move(source_path, dest_path)
-        except Exception as e:
-            print(f"Warning: Could not archive monthly profiles: {e}")
-
-    # Archive output_data/*.*
-    try:
-        for filename in os.listdir(data_dir):
-            source_path = os.path.join(data_dir, filename)
-            # Check if it's a file (not the 'old' directory)
-            if os.path.isfile(source_path):
-                dest_path = os.path.join(data_old_dir, filename)
-                print(f" - Archiving data file: {filename}")
-                shutil.move(source_path, dest_path) 
-    except Exception as e:
-        print(f"Warning: Could not archive output data: {e}")
-
-    # --- End Archiving ---
+    os.makedirs(monthly_profiles_dir, exist_ok=True)
 
     # Enable quick test mode to speed up execution
     quick_test = False  # Set to False for full year analysis
