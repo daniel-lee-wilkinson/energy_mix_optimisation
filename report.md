@@ -8,7 +8,7 @@ This report investigates the optimal mix of photovoltaic (PV) and wind power, co
 
 The primary goal of this project is to answer the following research question:
 
-**"For a site in Moomba, Australia, with a target annual energy demand of *D* MWh and a land area limit of *A* km², what capacities of PV and Wind power, operating in conjunction with a 120 MWh / 90 MW battery (90% efficiency, 20% minimum SoC), minimize the average Global Warming Potential (GWP) per kWh supplied over the year 2023? What level of grid dependency and renewable energy curtailment results from this GWP-optimized configuration, based on hourly NASA POWER weather data?"**
+**"For a site in Moomba, Australia, with a target annual energy demand of *D* MWh and a land area limit of *A* km², what capacities of PV and Wind power, operating in conjunction with a 120 MWh / 90 MW battery (90% efficiency, 20% minimum SoC), minimize the average Global Warming Potential (GWP) per kWh supplied over the year 2023? What level of grid dependency and renewable energy curtailment results from this GWP-optimised configuration, based on hourly NASA POWER weather data?"**
 
 This report details the methodology used and presents results for an example scenario where the system powers a CO2 removal process requiring *D* = 10,000 MWh annually within an *A* = 1000 km² land area.
 
@@ -122,7 +122,7 @@ The key results for the GWP-optimised configuration are summarised below:
 
 For the analysed scenario (10,000 MWh demand, 1000 km² land, Moomba weather, minimizing GWP/kWh), the model consistently favors maximizing PV installation up to the land limit. This occurs despite wind's significantly lower GWP factor (0.011 vs 0.07 kg CO2e/kWh) primarily because:
 1.  **Land Efficiency:** PV requires far less land per MW (0.02 km²/MW) compared to wind (0.26 km²/MW), approximately 13 times less.
-2.  **Generation Profile & Yield:** At the Moomba site, the modelled annual energy yield per km² of land dedicated appears substantially higher for PV than for wind under the utilized generation models. A direct comparison shows PV yielded ~5.2 MWh/km²/year (5219 MWh / 1000 km²) in the final configuration, whereas dedicating the same land to wind would yield significantly less total energy based on its lower land efficiency and site wind profile.
+2.  **Generation Profile & Yield:** At the Moomba site, the modelled annual energy yield per km² of land dedicated appears substantially higher for PV than for wind under the utilised generation models. A direct comparison shows PV yielded ~5.2 MWh/km²/year (5219 MWh / 1000 km²) in the final configuration, whereas dedicating the same land to wind would yield significantly less total energy based on its lower land efficiency and site wind profile.
 Even with a large land area, the lowest GWP solution involved filling that area with PV and supplementing the remaining ~49.5% demand with grid power (buffered by the battery), rather than allocating land to lower-GWP wind which would displace more total PV generation potential due to its larger footprint.
 
 The inclusion of the 120 MWh battery significantly reduces grid usage compared to a no-storage scenario but is insufficient to fully cover deficits for a load of this size with the variable renewable generation profile. Quantifying the marginal benefit (e.g., reduction in grid usage hours or average GWP) of larger storage capacities (e.g., 240 MWh) would be a valuable extension.
