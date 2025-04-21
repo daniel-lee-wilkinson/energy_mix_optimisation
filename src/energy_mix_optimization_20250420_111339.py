@@ -604,17 +604,32 @@ def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
     
     # Adjust demand based on temperature if temperature data is available
     if 'temperature' in energy_data.columns:
-        # Apply more realistic temperature-based demand adjustment
-        adjusted_hourly_demand = calculate_temperature_adjusted_demand(hourly_demand_kwh, energy_data['temperature'].values)
+        # Apply initial temperature-based demand adjustment logic
+        initial_adjusted_hourly_demand = calculate_temperature_adjusted_demand(hourly_demand_kwh, energy_data['temperature'].values)
         
-        # Summarize temperature effects on demand
-        print(f"Temperature-adjusted demand (base: {hourly_demand_kwh:.2f} kWh/hour)")
-        print(f"Hours with high temperature (>30°C): {(energy_data['temperature'] > 30).sum()} ({(energy_data['temperature'] > 30).sum()/len(energy_data)*100:.1f}%)")
-        print(f"Hours with low temperature (<10°C): {(energy_data['temperature'] < 10).sum()} ({(energy_data['temperature'] < 10).sum()/len(energy_data)*100:.1f}%)")
-        print(f"Average demand adjustment factor: {np.mean(adjusted_hourly_demand/hourly_demand_kwh):.3f}")
-        print(f"Max hourly demand: {np.max(adjusted_hourly_demand):.2f} kWh (vs base {hourly_demand_kwh:.2f} kWh)")
-        print(f"Total annual demand after adjustment: {np.sum(adjusted_hourly_demand)/1000:.2f} MWh (vs base {annual_demand_mwh:.2f} MWh)")
+        # Calculate the total annual kWh from this initial profile
+        initial_total_annual_kwh = initial_adjusted_hourly_demand.sum()
         
+        # Define the target total annual demand in kWh
+        target_total_annual_kwh = annual_demand_mwh * 1000
+        
+        # Calculate the scaling factor needed to match the target
+        # Avoid division by zero if initial total is zero
+        if initial_total_annual_kwh > 0:
+            scaling_factor = target_total_annual_kwh / initial_total_annual_kwh
+        else:
+            scaling_factor = 1.0 # Or handle as an error/warning if appropriate
+            print("Warning: Initial adjusted annual demand is zero. Cannot scale.")
+
+        # Apply the scaling factor to the hourly demand profile
+        adjusted_hourly_demand = initial_adjusted_hourly_demand * scaling_factor
+        print(f"Scaled temperature-adjusted demand profile to meet target {annual_demand_mwh:.2f} MWh/year.")
+        print(f" - Initial profile total: {initial_total_annual_kwh / 1000:.2f} MWh/year")
+        print(f" - Scaling factor applied: {scaling_factor:.4f}")
+        print(f" - Final profile total: {adjusted_hourly_demand.sum() / 1000:.2f} MWh/year")
+        
+        # --- Summarize temperature effects based on the *final* scaled profile ---
+        print(f"\nTemperature effects on *scaled* demand (base: {hourly_demand_kwh:.2f} kWh/hour average):")
         # Create temperature band analysis
         temp_bands = [(float('-inf'), 0), (0, 5), (5, 10), (10, 15), (15, 20), (20, 25), 
                       (25, 30), (30, 35), (35, 40), (40, float('inf'))]
@@ -634,9 +649,11 @@ def optimize_land_use(energy_data, annual_demand_mwh, available_land_km2):
             
             temp_band_hours[band_name] = mask.sum()
             if mask.sum() > 0:
-                temp_band_demand[band_name] = adjusted_hourly_demand[mask].mean() / hourly_demand_kwh
+                # Calculate demand factor relative to the *average* hourly demand of the *final* scaled profile
+                final_average_hourly_kwh = adjusted_hourly_demand.mean() 
+                temp_band_demand[band_name] = adjusted_hourly_demand[mask].mean() / final_average_hourly_kwh
         
-        print("\nTemperature band analysis:")
+        print("\nTemperature band analysis (demand factor relative to final profile average):")
         print(f"{'Temperature band':<15} {'Hours':<10} {'% of year':<12} {'Demand factor':<15}")
         print("-" * 55)
         for band in sorted(temp_band_hours.keys()):

@@ -70,8 +70,9 @@ The model and analysis rely on the following key assumptions:
 *   **GWP:** Assumed to be 0.65 kg CO2e per kWh (representative value for South Australia, may vary).
 
 **Energy Demand:**
-*   **Base:** Calculated based on the provided annual demand (e.g., 40 MWh in the `main` function).
-*   **Temperature Adjustment:** Base hourly demand is increased by 20% during hours when the ambient temperature exceeds 30°C.
+*   **Annual Target:** The `annual_demand_mwh` value provided (e.g., 40 MWh in `main`) represents the *target total annual energy demand* that the optimized mix must meet.
+*   **Hourly Profile Shaping:** An initial hourly demand profile is created by calculating a base average hourly demand from the annual target and then applying a temperature adjustment (increasing demand by 20% during hours > 30°C).
+*   **Scaling:** This initial hourly profile is then scaled proportionally (up or down) so that the sum of hourly demands over the entire year exactly matches the specified `annual_demand_mwh` target.
 
 **Optimization (`optimize_land_use` function):**
 *   **Objective:** Minimize the overall Global Warming Potential (GWP) of the energy mix (PV, Wind, Grid).
