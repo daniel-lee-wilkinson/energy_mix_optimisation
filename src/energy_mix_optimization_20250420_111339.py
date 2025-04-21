@@ -948,6 +948,12 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
         # Get unique months present in the data
         months = sorted(optimal_supply_profile['timestamp'].dt.month.unique())
         
+        # Dictionary to map month number to name
+        month_names = {
+            1: 'January', 2: 'February', 3: 'March', 4: 'April', 5: 'May', 6: 'June',
+            7: 'July', 8: 'August', 9: 'September', 10: 'October', 11: 'November', 12: 'December'
+        }
+        
         for month in months:
             # Filter data for the first 7 days of the month
             start_of_month = optimal_supply_profile['timestamp'].min().replace(day=1, month=month)
@@ -977,7 +983,9 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
             
             plt.xlabel('Date and Time')
             plt.ylabel('Energy (kWh)')
-            plt.title(f'Hourly Supply vs. Demand - First Week of Month {month:02d}')
+            # Use month name in the title
+            month_name = month_names.get(month, f'Month {month:02d}') # Fallback if month number is unexpected
+            plt.title(f'Hourly Supply vs. Demand - First Week of {month_name}')
             plt.legend(loc='upper right')
             plt.grid(True, linestyle='--', alpha=0.5)
             plt.xticks(rotation=45)
