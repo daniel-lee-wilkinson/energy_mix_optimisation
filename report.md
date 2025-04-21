@@ -69,21 +69,21 @@ This analysis seeks to answer the following questions:
     *   Hourly supply profile (PV, Wind, Grid, Demand) for the *optimal* mix (`optimal_supply_profile_*.csv`).
 *   **Visualizations:** Creates PNG plots illustrating key findings and trends. These include:
     *   Raw generation potential and temperature profiles (`generation_profiles_*.png`).
-       ![Generation Profiles](figures/generation_profiles_20250420_132222.png "Generation Profiles")
+       ![Generation Profiles](figures/generation_profiles.png "Generation Profiles")
       
     *   Monthly energy mix breakdown (PV/Wind/Grid vs Demand) (`monthly_energy_mix_*.png`).
-      ![Monthly Energy Mix](figures/monthly_energy_mix_20250420_132234.png "Monthly Energy Mix")
+      ![Monthly Energy Mix](figures/monthly_energy_mix.png "Monthly Energy Mix")
 
     *   Optimal energy mix pie chart (`optimal_energy_mix_*.png`).
 
-    ![Optimal Energy Mix](figures/optimal_energy_mix_20250420_132236.png "Optimal Energy Mix")
+    ![Optimal Energy Mix](figures/optimal_energy_mix.png "Optimal Energy Mix")
 
     *   Temperature distribution and impact analysis (`temperature_analysis_*.png`).
-       ![Temperature Analysis](figures/temperature_analysis_20250420_132235.png "Temperature Analysis")
+       ![Temperature Analysis](figures/temperature_analysis.png "Temperature Analysis")
 
     *   GWP variation by temperature range (`gwp_by_temperature_*.png`).
         
-        ![GWP by Temperature](figures/gwp_by_temperature_20250420_132235.png "GWP by Temperature")
+        ![GWP by Temperature](figures/gwp_by_temperature.png "GWP by Temperature")
 
     *   Hourly supply/demand profiles for representative weeks (`figures/monthly_first_week_profiles/hourly_supply_profile_month_*.png`).
 
