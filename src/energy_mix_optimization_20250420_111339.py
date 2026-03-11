@@ -798,9 +798,9 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
     # --- Data Saving ---
     print("Saving output data...")
     # Save the potential generation data (from input energy_data)
-    # potential_data_filename = get_timestamped_filename("australian_energy_data.csv")
-    # save_data_to_csv(energy_data, os.path.join(output_data_dir, "australian_energy_data.csv")) # Removed: Redundant, already saved in main()
-    # print(f"Saved potential generation data to output_data/australian_energy_data.csv")
+    # potential_data_filename = get_timestamped_filename("site_energy_data.csv")
+    # save_data_to_csv(energy_data, os.path.join(output_data_dir, "site_energy_data.csv")) # Removed: Redundant, already saved in main()
+    # print(f"Saved potential generation data to output_data/site_energy_data.csv")
 
     # Save the optimal supply profile (pass only filename)
     optimal_profile_filename = get_timestamped_filename("optimal_supply_profile.csv")
@@ -1448,8 +1448,8 @@ def run_optimization_workflow(
     actual_records = len(energy_data)
     print(f"Data contains {actual_records} hourly records from {actual_start} to {actual_end}")
 
-    save_data_to_csv(energy_data, "australian_energy_data_potentials.csv")
-    print("Saved energy data to output_data/australian_energy_data_potentials.csv")
+    save_data_to_csv(energy_data, "site_energy_data_potentials.csv")
+    print("Saved energy data to output_data/site_energy_data_potentials.csv")
 
     user_demand_mwh = annual_demand_mwh if annual_demand_mwh is not None else prompt_for_annual_demand_mwh()
     if user_demand_mwh <= 0:

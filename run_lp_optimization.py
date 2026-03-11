@@ -28,7 +28,9 @@ WIND_LAND_PER_MW = 0.26
 AVAILABLE_LAND_KM2 = 1000 # User specified for last run
 
 # Input file containing hourly potentials per MW
-POTENTIALS_CSV = os.path.join('output_data', 'australian_energy_data_potentials.csv')
+POTENTIALS_CSV_CANDIDATES = [
+    os.path.join('output_data', 'site_energy_data_potentials.csv'),
+]
 
 HOURS_PER_YEAR = 8760
 
@@ -51,15 +53,23 @@ def run_linear_programming_optimization(annual_demand_mwh):
     annual_demand_kwh = annual_demand_mwh * 1000
 
     # --- Load and Process Potential Data ---
-    try:
-        potentials_df = pd.read_csv(POTENTIALS_CSV)
-        print(f"Loaded potential data from {POTENTIALS_CSV}")
-    except FileNotFoundError:
-        print(f"Error: Input file not found: {POTENTIALS_CSV}")
+    potentials_df = None
+    selected_csv = None
+    for candidate in POTENTIALS_CSV_CANDIDATES:
+        if os.path.exists(candidate):
+            selected_csv = candidate
+            break
+
+    if selected_csv is None:
+        print(f"Error: Input file not found. Checked: {', '.join(POTENTIALS_CSV_CANDIDATES)}")
         print("Please run the simulation script ('run_optimization.py') first to generate it.")
         return None
+
+    try:
+        potentials_df = pd.read_csv(selected_csv)
+        print(f"Loaded potential data from {selected_csv}")
     except Exception as e:
-        print(f"Error reading {POTENTIALS_CSV}: {e}")
+        print(f"Error reading {selected_csv}: {e}")
         return None
 
     # Calculate average hourly potential per MW (kWh/MW/hour)
