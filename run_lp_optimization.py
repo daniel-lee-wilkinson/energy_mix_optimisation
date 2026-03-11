@@ -11,7 +11,6 @@ and minimizing total annual GWP.
 import pandas as pd
 import numpy as np
 from scipy.optimize import linprog
-import sys
 import os
 
 # --- Configuration ---

@@ -19,8 +19,8 @@ def find_latest_script():
         print("Error: No optimisation scripts found in src directory")
         sys.exit(1)
     
-    # Sort by modification time (newest first)
-    latest_script = max(scripts, key=os.path.getmtime)
+    # Use timestamped filenames for deterministic selection.
+    latest_script = sorted(scripts)[-1]
     print(f"Using latest script: {latest_script}")
     return latest_script
 

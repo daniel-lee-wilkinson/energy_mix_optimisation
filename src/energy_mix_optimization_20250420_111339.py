@@ -4,16 +4,20 @@ load_dotenv()
 
 import pandas as pd
 import numpy as np
-from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import os
-import shutil # Import shutil for moving files
-import pytz
 import math
 import requests
-from io import StringIO
 import traceback
+from typing import Dict, Optional, Tuple
+
+
+def _normalise_pandas_frequency(freq: str, default: str = '1h') -> str:
+    """Normalize frequency aliases for current pandas versions (e.g., H -> h)."""
+    if not isinstance(freq, str) or not freq.strip():
+        return default
+    return freq.strip().replace('H', 'h')
 
 def calculate_solar_position(dates, latitude, longitude):
     """
@@ -183,19 +187,23 @@ def fetch_nasa_power_data(latitude, longitude, start_date, end_date):
             print(f"Response text: {e.response.text[:200]}...")  # Print first 200 chars
         return None
 
-def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
+def process_real_data(
+    weather_data,
+    pv_capacity=1000,
+    wind_capacity=2000,
+    latitude=-28.1083,
+    longitude=140.2028,
+):
     """
     Process real weather data to calculate generation potential per MW.
     The pv_capacity and wind_capacity arguments are no longer used directly 
     for calculating output columns but are kept for potential future use or compatibility.
+    Latitude/longitude are used to compute solar elevation for day/night masking.
     """
     # Calculate PV generation (kWh)
     # First ensure zero generation when sun is below horizon (elevation ≤ 0)
     # Calculate solar position for each timestamp
     dates = weather_data['timestamp'].tolist()
-    # Moomba coordinates (use these directly as we know them)
-    latitude = -28.1083  # South
-    longitude = 140.2028  # East
     
     # Calculate solar position to determine day/night
     solpos = calculate_solar_position(dates, latitude, longitude)
@@ -277,34 +285,63 @@ def process_real_data(weather_data, pv_capacity=1000, wind_capacity=2000):
     
     return weather_data
 
-def generate_moomba_data(start_date, end_date, resolution='1H', use_real_data=True):
+def generate_moomba_data(
+    start_date,
+    end_date,
+    resolution='1h',
+    use_real_data=True,
+    latitude=None,
+    longitude=None,
+):
     """
-    Generate weather and generation data for Moomba, Australia
-    Coordinates: 28° 06′ 30″ S, 140° 12′ 10″ E
+    Generate weather and generation data.
+
+    Legacy note: despite the function name, this now supports any location.
+    If latitude/longitude are not supplied, PRIMARY_LATITUDE/PRIMARY_LONGITUDE
+    from the environment are used, falling back to built-in defaults.
     """
-    # Moomba coordinates
-    latitude = -28.1083  # South
-    longitude = 140.2028  # East
+    if latitude is None:
+        try:
+            latitude = float(os.getenv("PRIMARY_LATITUDE", "-28.1083"))
+        except ValueError:
+            print("Warning: Invalid PRIMARY_LATITUDE. Using default -28.1083")
+            latitude = -28.1083
+
+    if longitude is None:
+        try:
+            longitude = float(os.getenv("PRIMARY_LONGITUDE", "140.2028"))
+        except ValueError:
+            print("Warning: Invalid PRIMARY_LONGITUDE. Using default 140.2028")
+            longitude = 140.2028
     
     if use_real_data:
         # Fetch real data from NASA POWER
         data = fetch_nasa_power_data(latitude, longitude, start_date, end_date)
         if data is not None:
             # Process the real data
-            data = process_real_data(data)
+            data = process_real_data(data, latitude=latitude, longitude=longitude)
             return data
         else:
             print("Falling back to synthetic data due to API error")
     
     # Fallback to synthetic data if real data fetch fails
-    return generate_synthetic_data(start_date, end_date, latitude, longitude)
+    return generate_synthetic_data(start_date, end_date, latitude, longitude, resolution=resolution)
 
-def generate_synthetic_data(start_date, end_date, latitude, longitude):
+def generate_synthetic_data(start_date, end_date, latitude, longitude, resolution='1h'):
     """
     Generate synthetic weather data (fallback method)
     """
+    freq = _normalise_pandas_frequency(resolution)
+
+    start_ts = pd.to_datetime(start_date)
+    end_ts = pd.to_datetime(end_date)
+
+    # If a date-only end value is supplied, include the full end day for hourly data.
+    if end_ts.hour == 0 and end_ts.minute == 0 and end_ts.second == 0:
+        end_ts = end_ts + timedelta(hours=23)
+
     # Create time range
-    date_range = pd.date_range(start=start_date, end=end_date, freq='1H')
+    date_range = pd.date_range(start=start_ts, end=end_ts, freq=freq)
     
     # Calculate solar position
     solpos = calculate_solar_position(date_range, latitude, longitude)
@@ -339,7 +376,7 @@ def generate_synthetic_data(start_date, end_date, latitude, longitude):
     })
     
     # Process the synthetic data
-    data = process_real_data(data)
+    data = process_real_data(data, latitude=latitude, longitude=longitude)
     
     return data
 
@@ -367,7 +404,7 @@ def calculate_temperature_adjusted_demand(base_demand, temperature):
 
 def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2, 
                        pv_land_per_mw=0.02, wind_land_per_mw=0.26, 
-                       pv_gwp=0.041, wind_gwp=0.011, grid_gwp=0.65, 
+                       pv_gwp=0.07, wind_gwp=0.011, grid_gwp=0.6, 
                        pv_capacities=np.linspace(0, 300, 30), wind_capacities=np.linspace(0, 200, 30), 
                        figures_dir='figures', output_data_dir='output_data',
                        target_demand_temp_threshold=30, target_demand_increase_factor=1.2,
@@ -468,7 +505,7 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
     count = 0
 
     # --- Add flag for verbose debugging ---
-    verbose_debug = True # Set to False to reduce output
+    verbose_debug = False # Set to True for detailed per-combination output
 
     for pv_cap in pv_capacities:
         for wind_cap in wind_capacities:
@@ -1018,339 +1055,360 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
     
     return best_mix
 
-def main():
-    # Debug print
-    print("Starting optimization script...")
-
-    # --- Apply Publication Formatting Settings --- 
+def apply_publication_formatting() -> None:
+    """Apply publication-style matplotlib defaults used across generated figures."""
     plt.rcParams.update({
-        "font.size": 12,          # Base font size
-        "font.family": "serif",   # Or "sans-serif"
-        "font.serif": ["Times New Roman"], # Specific serif font
-        # "font.sans-serif": ["Arial"],    # Specific sans-serif font
-        "axes.labelsize": 14,     # Fontsize of the x and y labels
-        "axes.titlesize": 16,     # Fontsize of the axes title
-        "xtick.labelsize": 12,    # Fontsize of the tick labels
-        "ytick.labelsize": 12,    # Fontsize of the tick labels
-        "legend.fontsize": 12,    # Legend fontsize
-        "figure.titlesize": 18,   # Fontsize of the figure title
-        "lines.linewidth": 2,     # Line width
-        "lines.markersize": 6,    # Marker size
-        "figure.dpi": 300,        # Figure resolution
-        "savefig.dpi": 300,       # Resolution for saved figures
-        "savefig.format": 'png',  # Default save format (use png for compatibility, pdf also good)
-        "savefig.bbox": 'tight',  # Tight bounding box
-        "axes.spines.top": False, # Remove top spine
-        "axes.spines.right": False # Remove right spine
+        "font.size": 12,
+        "font.family": "serif",
+        # Keep Times first when available, but provide Linux-safe serif fallbacks.
+        "font.serif": [
+            "Times New Roman",
+            "Liberation Serif",
+            "Nimbus Roman No9 L",
+            "DejaVu Serif",
+        ],
+        "axes.labelsize": 14,
+        "axes.titlesize": 16,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "legend.fontsize": 12,
+        "figure.titlesize": 18,
+        "lines.linewidth": 2,
+        "lines.markersize": 6,
+        "figure.dpi": 300,
+        "savefig.dpi": 300,
+        "savefig.format": 'png',
+        "savefig.bbox": 'tight',
+        "axes.spines.top": False,
+        "axes.spines.right": False,
     })
     print("Applied publication-ready formatting settings.")
 
-    # --- Clean up / Archiving removed (Strategy 1: Fixed Filenames) ---
-    
-    # Ensure base directories exist (still needed)
-    figures_dir = 'figures'
-    data_dir = 'output_data'
+
+def ensure_base_directories(figures_dir: str = 'figures', data_dir: str = 'output_data') -> None:
+    """Create output directories required by the optimization workflow."""
     monthly_profiles_dir = os.path.join(figures_dir, 'monthly_first_week_profiles')
     os.makedirs(figures_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(monthly_profiles_dir, exist_ok=True)
 
-    # Enable quick test mode to speed up execution
-    quick_test = False  # Set to False for full year analysis
-    print(f"Quick test mode: {quick_test}")
-    
-    # Time period
+
+def get_analysis_period(quick_test: bool) -> Tuple[str, str]:
+    """Return start and end dates for either quick test mode or full-year mode."""
     if quick_test:
-        # Use a shorter time period for quick testing
-        start_date = '2023-01-01'
-        end_date = '2023-01-07'  # Just one week for quick testing
-    else:
-        start_date = '2023-01-01' # Full year 2023
-        end_date = '2023-12-31'  # Full year 2023
-    
-    print(f"Analysis period: {start_date} to {end_date}")
-    
-    # --- Load Location Configuration from Environment Variables ---
+        return '2023-01-01', '2023-01-07'
+    return '2023-01-01', '2023-12-31'
+
+
+def _get_env_float(var_name: str, default: str) -> float:
+    """Parse a float from environment variables with a safe default fallback."""
+    try:
+        return float(os.getenv(var_name, default))
+    except ValueError:
+        print(f"Warning: Invalid {var_name} environment variable. Using default placeholder")
+        return float(default)
+
+
+def load_location_configuration() -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Load primary and fallback locations from environment variables."""
     print("\nLoading location configuration from environment variables...")
-    
-    # Primary Location (Defaults are placeholders, replace with env vars)
-    default_primary_location_name = "Primary Location"
-    default_primary_latitude = "-28.1083" # Default placeholder Latitude
-    default_primary_longitude = "140.2028" # Default placeholder Longitude
-    
-    primary_location_name = os.getenv("PRIMARY_LOCATION_NAME", default_primary_location_name)
-    try:
-        primary_latitude = float(os.getenv("PRIMARY_LATITUDE", default_primary_latitude))
-    except ValueError:
-        print(f"Warning: Invalid PRIMARY_LATITUDE environment variable. Using default placeholder")
-        primary_latitude = float(default_primary_latitude)
-    try:
-        primary_longitude = float(os.getenv("PRIMARY_LONGITUDE", default_primary_longitude))
-    except ValueError:
-        print(f"Warning: Invalid PRIMARY_LONGITUDE environment variable. Using default placeholder")
-        primary_longitude = float(default_primary_longitude)
 
-    print(f"  Primary Location: '{primary_location_name}' ({primary_latitude}, {primary_longitude})")
+    primary = {
+        'name': os.getenv("PRIMARY_LOCATION_NAME", "Primary Location"),
+        'latitude': _get_env_float("PRIMARY_LATITUDE", "-28.1083"),
+        'longitude': _get_env_float("PRIMARY_LONGITUDE", "140.2028"),
+    }
+    print(f"  Primary Location: '{primary['name']}' ({primary['latitude']}, {primary['longitude']})")
 
-    # Fallback Location (Defaults are placeholders)
-    default_fallback_location_name = "Fallback Location"
-    default_fallback_latitude = "-29.0139" # Default placeholder Fallback Latitude
-    default_fallback_longitude = "134.7544" # Default placeholder Fallback Longitude
-    
-    fallback_location_name = os.getenv("FALLBACK_LOCATION_NAME", default_fallback_location_name)
-    try:
-        fallback_latitude = float(os.getenv("FALLBACK_LATITUDE", default_fallback_latitude))
-    except ValueError:
-        print(f"Warning: Invalid FALLBACK_LATITUDE environment variable. Using default placeholder")
-        fallback_latitude = float(default_fallback_latitude)
-    try:
-        fallback_longitude = float(os.getenv("FALLBACK_LONGITUDE", default_fallback_longitude))
-    except ValueError:
-        print(f"Warning: Invalid FALLBACK_LONGITUDE environment variable. Using default placeholder")
-        fallback_longitude = float(default_fallback_longitude)
+    fallback = {
+        'name': os.getenv("FALLBACK_LOCATION_NAME", "Fallback Location"),
+        'latitude': _get_env_float("FALLBACK_LATITUDE", "-29.0139"),
+        'longitude': _get_env_float("FALLBACK_LONGITUDE", "134.7544"),
+    }
+    print(f"  Fallback Location: '{fallback['name']}' ({fallback['latitude']}, {fallback['longitude']})")
 
-    print(f"  Fallback Location: '{fallback_location_name}' ({fallback_latitude}, {fallback_longitude})")
-    # --- End Location Configuration ---
+    return primary, fallback
 
-    # --- Data Fetching/Generation ---
+
+def load_energy_data_with_fallback(
+    primary: Dict[str, float],
+    fallback: Dict[str, float],
+    start_date: str,
+    end_date: str,
+) -> Tuple[Optional[pd.DataFrame], str, bool]:
+    """Load real data with fallback location, then fallback to synthetic if needed."""
+    location_name_used = "Unknown"
     use_synthetic = False
-    location_name_used = "Unknown" # Track which location data was actually used
-    energy_data = None  # Initialize energy_data variable
-    real_data_flag = False
-    
-    # Try to fetch real data for the primary location first
-    try:
-        print(f"\nAttempting to fetch NASA POWER data for {primary_location_name}...")
-        energy_data, real_data_flag = generate_location_data(primary_location_name, primary_latitude, primary_longitude, start_date, end_date)
-        if real_data_flag:
-            location_name_used = primary_location_name
-        else:
-            print(f"Failed to get real data for {primary_location_name}.")
-            energy_data = None # Ensure energy_data is None if fetch failed
-    except Exception as e:
-        print(f"\nError fetching or processing data for {primary_location_name}: {e}")
-        traceback.print_exc() # Print detailed error
-        energy_data = None # Ensure energy_data is None on error
-        
-    # If primary location failed, try fallback location
-    if energy_data is None or energy_data.empty:
-        print(f"\nPrimary location data failed. Attempting fallback location: {fallback_location_name}...")
-        try:
-            energy_data, real_data_flag = generate_location_data(fallback_location_name, fallback_latitude, fallback_longitude, start_date, end_date)
-            if real_data_flag:
-                 location_name_used = fallback_location_name
-            else:
-                print(f"Failed to get real data for {fallback_location_name}.")
-                energy_data = None
-        except Exception as e:
-            print(f"\nError fetching or processing data for {fallback_location_name}: {e}")
-            traceback.print_exc() # Print detailed error
-            energy_data = None
 
-    # If both real data attempts fail, fall back to synthetic data using primary location coordinates
-    if energy_data is None or energy_data.empty:
-        print("\nBoth real data fetches failed. Falling back to synthetic data...")
+    for idx, location in enumerate([primary, fallback]):
+        if idx == 0:
+            print(f"\nAttempting to fetch NASA POWER data for {location['name']}...")
+        else:
+            print(f"\nPrimary location data failed. Attempting fallback location: {location['name']}...")
+
         try:
-            # Generate synthetic data using the primary coordinates
-            energy_data = generate_synthetic_data(start_date, end_date, primary_latitude, primary_longitude)
-            # Add location column manually for synthetic data
-            # Use a generic reference for the location name in the synthetic data identifier
-            energy_data['location'] = f"Synthetic data for {primary_location_name} coordinates" 
-            location_name_used = f"Synthetic ({primary_location_name} coords)"
-            use_synthetic = True
+            energy_data, real_data_flag = generate_location_data(
+                location['name'],
+                location['latitude'],
+                location['longitude'],
+                start_date,
+                end_date,
+            )
+            if real_data_flag and energy_data is not None and not energy_data.empty:
+                location_name_used = location['name']
+                return energy_data, location_name_used, use_synthetic
+            print(f"Failed to get real data for {location['name']}.")
         except Exception as e:
-            print(f"\nError generating synthetic data: {e}")
+            print(f"\nError fetching or processing data for {location['name']}: {e}")
             traceback.print_exc()
-            # Handle catastrophic failure - no data at all
-            print("CRITICAL ERROR: Could not obtain or generate any energy data. Exiting.")
-            return # Exit script
 
-    print(f"\nData source used for analysis: {location_name_used}{' (synthetic)' if use_synthetic else ' (real NASA POWER)'}")
-    
-    # --- Execute main logic ONLY if data is valid ---
-    if energy_data is not None and not energy_data.empty:
-        # --- Add check for actual data range ---
-        actual_start = energy_data['timestamp'].min().strftime('%Y-%m-%d')
-        actual_end = energy_data['timestamp'].max().strftime('%Y-%m-%d')
-        actual_records = len(energy_data)
-        print(f"Data contains {actual_records} hourly records from {actual_start} to {actual_end}")
-        
-        # Save the data to a CSV file
-        save_data_to_csv(energy_data, "australian_energy_data_potentials.csv")
-        print("Saved energy data to output_data/australian_energy_data_potentials.csv")
+    print("\nBoth real data fetches failed. Falling back to synthetic data...")
+    try:
+        energy_data = generate_synthetic_data(
+            start_date,
+            end_date,
+            primary['latitude'],
+            primary['longitude'],
+        )
+        energy_data['location'] = f"Synthetic data for {primary['name']} coordinates"
+        location_name_used = f"Synthetic ({primary['name']} coords)"
+        use_synthetic = True
+        return energy_data, location_name_used, use_synthetic
+    except Exception as e:
+        print(f"\nError generating synthetic data: {e}")
+        traceback.print_exc()
+        print("CRITICAL ERROR: Could not obtain or generate any energy data. Exiting.")
+        return None, location_name_used, use_synthetic
 
-        # --- Get User Input for Annual Demand ---
-        while True:
-            try:
-                user_demand_mwh = float(input("Enter the target annual energy demand in MWh (e.g., 40): "))
-                if user_demand_mwh > 0:
-                    break
-                else:
-                    print("Demand must be a positive number.")
-            except ValueError:
-                print("Invalid input. Please enter a number.")
 
-        print(f"Using target annual demand: {user_demand_mwh} MWh")
+def prompt_for_annual_demand_mwh() -> float:
+    """Request a positive annual demand value from stdin."""
+    while True:
+        try:
+            demand_mwh = float(input("Enter the target annual energy demand in MWh (e.g., 40): "))
+            if demand_mwh > 0:
+                return demand_mwh
+            print("Demand must be a positive number.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
 
-        # --- Calculate Dynamic Capacity Search Ranges ---
-        print("\nCalculating dynamic search ranges for PV and Wind capacities...")
-        
-        # Constants
-        pv_land_per_mw = 0.02
-        wind_land_per_mw = 0.26
-        available_land_km2 = 1000 # Increased land area
-        min_search_range_mw = 50  # Minimum capacity (MW) to search up to
-        demand_headroom_factor = 1.5 # Multiplier for estimated capacity needed
-        num_capacity_steps = 30 # Number of steps for linspace
 
-        # Calculate average capacity factors from site data
-        if 'pv_potential_per_mw' in energy_data.columns and 'wind_potential_per_mw' in energy_data.columns:
-            avg_pv_cf = energy_data['pv_potential_per_mw'].mean()
-            avg_wind_cf = energy_data['wind_potential_per_mw'].mean()
-            # Use a small floor value to avoid division by zero for sites with no potential
-            avg_pv_cf = max(avg_pv_cf, 0.01) 
-            avg_wind_cf = max(avg_wind_cf, 0.01)
-            print(f"  Average site potential (Capacity Factor estimate): PV={avg_pv_cf:.3f}, Wind={avg_wind_cf:.3f}")
+def calculate_dynamic_capacity_ranges(
+    energy_data: pd.DataFrame,
+    annual_demand_mwh: float,
+    available_land_km2: float,
+    pv_land_per_mw: float,
+    wind_land_per_mw: float,
+    min_search_range_mw: float = 50,
+    demand_headroom_factor: float = 1.5,
+    num_capacity_steps: int = 30,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate dynamic PV and wind capacity ranges based on demand, data, and land limits."""
+    print("\nCalculating dynamic search ranges for PV and Wind capacities...")
 
-            # Calculate max capacities based purely on land limit
-            max_pv_from_land = available_land_km2 / pv_land_per_mw
-            max_wind_from_land = available_land_km2 / wind_land_per_mw
-            print(f"  Max capacity purely from land: PV={max_pv_from_land:.1f} MW, Wind={max_wind_from_land:.1f} MW")
+    if 'pv_potential_per_mw' in energy_data.columns and 'wind_potential_per_mw' in energy_data.columns:
+        avg_pv_cf = max(energy_data['pv_potential_per_mw'].mean(), 0.01)
+        avg_wind_cf = max(energy_data['wind_potential_per_mw'].mean(), 0.01)
+        print(f"  Average site potential (Capacity Factor estimate): PV={avg_pv_cf:.3f}, Wind={avg_wind_cf:.3f}")
 
-            # Calculate average hourly demand in kW
-            avg_hourly_demand_kw = (user_demand_mwh * 1000) / len(energy_data)
+        max_pv_from_land = available_land_km2 / pv_land_per_mw
+        max_wind_from_land = available_land_km2 / wind_land_per_mw
+        print(f"  Max capacity purely from land: PV={max_pv_from_land:.1f} MW, Wind={max_wind_from_land:.1f} MW")
 
-            # Estimate capacities needed if each tech met the entire demand
-            estimated_pv_cap_for_demand = avg_hourly_demand_kw / avg_pv_cf
-            estimated_wind_cap_for_demand = avg_hourly_demand_kw / avg_wind_cf
-            print(f"  Estimated capacity to meet demand individually: PV={estimated_pv_cap_for_demand:.1f} MW, Wind={estimated_wind_cap_for_demand:.1f} MW")
+        avg_hourly_demand_kw = (annual_demand_mwh * 1000) / len(energy_data)
+        estimated_pv_cap_for_demand = avg_hourly_demand_kw / avg_pv_cf
+        estimated_wind_cap_for_demand = avg_hourly_demand_kw / avg_wind_cf
+        print(f"  Estimated capacity to meet demand individually: PV={estimated_pv_cap_for_demand:.1f} MW, Wind={estimated_wind_cap_for_demand:.1f} MW")
 
-            # Calculate the dynamic upper bound for the search range
-            pv_search_upper_bound = max(min_search_range_mw, min(max_pv_from_land, demand_headroom_factor * estimated_pv_cap_for_demand))
-            wind_search_upper_bound = max(min_search_range_mw, min(max_wind_from_land, demand_headroom_factor * estimated_wind_cap_for_demand))
-            
-            print(f"  Using dynamic search upper bounds: PV={pv_search_upper_bound:.1f} MW, Wind={wind_search_upper_bound:.1f} MW")
-
-            # Create the dynamic capacity arrays
-            pv_capacities_dynamic = np.linspace(0, pv_search_upper_bound, num_capacity_steps)
-            wind_capacities_dynamic = np.linspace(0, wind_search_upper_bound, num_capacity_steps)
-        else:
-            print("Error: Required columns 'pv_potential_per_mw' or 'wind_potential_per_mw' not found in data.")
-            print("Using default capacity search ranges.")
-            pv_capacities_dynamic = np.linspace(0, 500, num_capacity_steps)
-            wind_capacities_dynamic = np.linspace(0, 200, num_capacity_steps)
-
-        # --- Run Optimization First ---
-        print(f"\nOptimizing energy mix for {user_demand_mwh} MWh annual demand with {available_land_km2} km² available land:")
-        print("-" * 80)
-
-        # Run the land use optimization using user input and dynamic ranges
-        optimal_mix = optimise_land_use(
-            energy_data,
-            annual_demand_mwh=user_demand_mwh, # Use user input
-            available_land_km2=available_land_km2,
-            pv_land_per_mw=pv_land_per_mw,
-            wind_land_per_mw=wind_land_per_mw,
-            # --- Pass updated GWP factors ---
-            pv_gwp=0.07, 
-            wind_gwp=0.011, 
-            grid_gwp=0.6,
-            # --- Use dynamic capacity search ranges ---
-            pv_capacities=pv_capacities_dynamic, 
-            wind_capacities=wind_capacities_dynamic 
+        pv_search_upper_bound = max(
+            min_search_range_mw,
+            min(max_pv_from_land, demand_headroom_factor * estimated_pv_cap_for_demand),
+        )
+        wind_search_upper_bound = max(
+            min_search_range_mw,
+            min(max_wind_from_land, demand_headroom_factor * estimated_wind_cap_for_demand),
         )
 
-        # Check if optimization was successful before proceeding
-        if optimal_mix.get("error"):
-            print(f"Optimization failed: {optimal_mix['error']}")
-            # Optionally, you might want to return here as well, or handle the error differently
-        elif optimal_mix['pv_capacity'] < 0 or optimal_mix['wind_capacity'] < 0:
-            print("Optimization did not find a valid positive capacity mix.")
-            # Optionally, handle this case
-        else:
-            # --- Plotting for the Optimal System ---
-            print("\nGenerating plot for the optimal system generation profiles...")
-            
-            # Calculate optimal generation based on returned capacities
-            optimal_pv_gen = energy_data['pv_potential_per_mw'] * optimal_mix['pv_capacity']
-            optimal_wind_gen = energy_data['wind_potential_per_mw'] * optimal_mix['wind_capacity']
-            
-            plt.figure(figsize=(15, 10))
-            
-            plt.subplot(3, 1, 1)
-            plt.plot(energy_data['timestamp'], optimal_pv_gen)
-            plt.title(f"Optimal PV Generation ({optimal_mix['pv_capacity']:.2f} MW)")
-            plt.ylabel('kWh') # Use kWh
-            
-            plt.subplot(3, 1, 2)
-            plt.plot(energy_data['timestamp'], optimal_wind_gen)
-            plt.title(f"Optimal Wind Generation ({optimal_mix['wind_capacity']:.2f} MW)")
-            plt.ylabel('kWh') # Use kWh
-            
-            plt.subplot(3, 1, 3)
-            plt.plot(energy_data['timestamp'], energy_data['temperature'])
-            plt.title('Temperature')
-            plt.ylabel('°C')
-            plt.axhline(y=30, color='red', linestyle='--', label='30°C threshold')
-            plt.legend()
-            
-            plt.tight_layout()
-            
-            # Save the optimal system plot
-            optimal_plot_filename = get_timestamped_filename('optimal_system_profiles.png') # New filename
-            plt.savefig(os.path.join('figures', optimal_plot_filename))
-            plt.close()
-            print(f"Saved optimal system profiles plot to figures/{optimal_plot_filename}")
-            
-            # --- Print Optimization Results --- 
-            print("\n" + "="*80)
-            print("OPTIMAL ENERGY MIX SOLUTION")
-            print("="*80)
-            print(f"Optimal PV capacity: {optimal_mix['pv_capacity']:.2f} MW using {optimal_mix['pv_land']:.2f} km²")
-            print(f"Optimal wind capacity: {optimal_mix['wind_capacity']:.2f} MW using {optimal_mix['wind_land']:.2f} km²")
-            print(f"Total land usage: {optimal_mix['land_used']:.2f} km² of {1000:.2f} km² available")
-            print("\nEnergy mix:")
-            print(f"PV generation: {optimal_mix['pv_annual_total']/1000:.2f} MWh/year ({optimal_mix['pv_share']:.1f}%)")
-            print(f"Wind generation: {optimal_mix['wind_annual_total']/1000:.2f} MWh/year ({optimal_mix['wind_share']:.1f}%)")
-            print(f"Grid usage: {optimal_mix['grid_annual_total']/1000:.2f} MWh/year ({optimal_mix['grid_share']:.1f}%)")
-            print(f"Total annual generation: {optimal_mix['total_annual_generation']/1000:.2f} MWh/year")
-            
-            print(f"\nGlobal Warming Potential: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
-            
-            print("\nStability analysis:")
-            print(f"Hours with renewable generation deficit: {optimal_mix['grid_deficit_hours']} of {len(energy_data)} ({optimal_mix['grid_deficit_percentage']:.1f}%)")
-            print(f"Maximum hourly deficit: {optimal_mix['max_hourly_deficit']:.2f} kWh")
-            
-            print("\nOutput files created:")
-            print("- output_data/optimal_supply_profile.csv - Hourly generation data")
-            print("- figures/generation_profiles.png - Visualizations of potential generation")
-            print("- figures/monthly_energy_mix.png - Monthly energy mix chart")
-            print("- figures/optimal_energy_mix_summary.png - Pie chart of energy mix")
-            print("- figures/temperature_analysis.png - Temperature impact analysis")
-            print("- figures/gwp_by_temperature.png - GWP vs temperature analysis")
-            print("- figures/optimal_system_profiles.png - Optimal system generation profiles")
-            print("- figures/monthly_first_week_profiles/ - Hourly profiles for first week of each month")
+        print(f"  Using dynamic search upper bounds: PV={pv_search_upper_bound:.1f} MW, Wind={wind_search_upper_bound:.1f} MW")
+        return (
+            np.linspace(0, pv_search_upper_bound, num_capacity_steps),
+            np.linspace(0, wind_search_upper_bound, num_capacity_steps),
+        )
 
-            # Create visualization of the optimal mix
-            labels = ['PV', 'Wind', 'Grid']
-            sizes = [optimal_mix['pv_share'], optimal_mix['wind_share'], optimal_mix['grid_share']]
-            colours = ['gold', 'deepskyblue', 'dimgray']
-            explode = (0.1, 0.1, 0)
-            
-            plt.figure(figsize=(10, 7))
-            plt.pie(sizes, explode=explode, labels=labels, colors=colours, autopct='%1.1f%%', startangle=140)
-            plt.axis('equal')
-            plt.title(f"Optimal Energy Mix for {user_demand_mwh} MWh Annual Demand\nTotal GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
-            
-            # Save with fixed filename consistent with optimise_land_use
-            # timestamped_filename = get_timestamped_filename('optimal_energy_mix.png') 
-            plt.savefig(os.path.join('figures', 'optimal_energy_mix_summary.png')) # Use fixed name
-            plt.close()
-            print(f"Saved optimal energy mix summary plot to figures/optimal_energy_mix_summary.png")
+    print("Error: Required columns 'pv_potential_per_mw' or 'wind_potential_per_mw' not found in data.")
+    print("Using default capacity search ranges.")
+    return (
+        np.linspace(0, 500, num_capacity_steps),
+        np.linspace(0, 200, num_capacity_steps),
+    )
 
-    else:
+
+def plot_optimal_system_profiles(energy_data: pd.DataFrame, optimal_mix: Dict[str, float]) -> None:
+    """Plot and save the optimal PV/wind generation profiles and temperature."""
+    print("\nGenerating plot for the optimal system generation profiles...")
+
+    optimal_pv_gen = energy_data['pv_potential_per_mw'] * optimal_mix['pv_capacity']
+    optimal_wind_gen = energy_data['wind_potential_per_mw'] * optimal_mix['wind_capacity']
+
+    plt.figure(figsize=(15, 10))
+
+    plt.subplot(3, 1, 1)
+    plt.plot(energy_data['timestamp'], optimal_pv_gen)
+    plt.title(f"Optimal PV Generation ({optimal_mix['pv_capacity']:.2f} MW)")
+    plt.ylabel('kWh')
+
+    plt.subplot(3, 1, 2)
+    plt.plot(energy_data['timestamp'], optimal_wind_gen)
+    plt.title(f"Optimal Wind Generation ({optimal_mix['wind_capacity']:.2f} MW)")
+    plt.ylabel('kWh')
+
+    plt.subplot(3, 1, 3)
+    plt.plot(energy_data['timestamp'], energy_data['temperature'])
+    plt.title('Temperature')
+    plt.ylabel('°C')
+    plt.axhline(y=30, color='red', linestyle='--', label='30°C threshold')
+    plt.legend()
+
+    plt.tight_layout()
+    optimal_plot_filename = get_timestamped_filename('optimal_system_profiles.png')
+    plt.savefig(os.path.join('figures', optimal_plot_filename))
+    plt.close()
+    print(f"Saved optimal system profiles plot to figures/{optimal_plot_filename}")
+
+
+def print_optimal_mix_summary(
+    optimal_mix: Dict[str, float],
+    user_demand_mwh: float,
+    total_hours: int,
+    available_land_km2: float,
+) -> None:
+    """Print optimization summary and create final energy-mix pie chart."""
+    print("\n" + "=" * 80)
+    print("OPTIMAL ENERGY MIX SOLUTION")
+    print("=" * 80)
+    print(f"Optimal PV capacity: {optimal_mix['pv_capacity']:.2f} MW using {optimal_mix['pv_land']:.2f} km²")
+    print(f"Optimal wind capacity: {optimal_mix['wind_capacity']:.2f} MW using {optimal_mix['wind_land']:.2f} km²")
+    print(f"Total land usage: {optimal_mix['land_used']:.2f} km² of {available_land_km2:.2f} km² available")
+    print("\nEnergy mix:")
+    print(f"PV generation: {optimal_mix['pv_annual_total']/1000:.2f} MWh/year ({optimal_mix['pv_share']:.1f}%)")
+    print(f"Wind generation: {optimal_mix['wind_annual_total']/1000:.2f} MWh/year ({optimal_mix['wind_share']:.1f}%)")
+    print(f"Grid usage: {optimal_mix['grid_annual_total']/1000:.2f} MWh/year ({optimal_mix['grid_share']:.1f}%)")
+    print(f"Total annual generation: {optimal_mix['total_annual_generation']/1000:.2f} MWh/year")
+    print(f"\nGlobal Warming Potential: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
+    print("\nStability analysis:")
+    print(f"Hours with renewable generation deficit: {optimal_mix['grid_deficit_hours']} of {total_hours} ({optimal_mix['grid_deficit_percentage']:.1f}%)")
+    print(f"Maximum hourly deficit: {optimal_mix['max_hourly_deficit']:.2f} kWh")
+
+    print("\nOutput files created:")
+    print("- output_data/optimal_supply_profile.csv - Hourly generation data")
+    print("- figures/generation_profiles.png - Visualizations of potential generation")
+    print("- figures/monthly_energy_mix.png - Monthly energy mix chart")
+    print("- figures/optimal_energy_mix_summary.png - Pie chart of energy mix")
+    print("- figures/temperature_analysis.png - Temperature impact analysis")
+    print("- figures/gwp_by_temperature.png - GWP vs temperature analysis")
+    print("- figures/optimal_system_profiles.png - Optimal system generation profiles")
+    print("- figures/monthly_first_week_profiles/ - Hourly profiles for first week of each month")
+
+    labels = ['PV', 'Wind', 'Grid']
+    sizes = [optimal_mix['pv_share'], optimal_mix['wind_share'], optimal_mix['grid_share']]
+    colours = ['gold', 'deepskyblue', 'dimgray']
+    explode = (0.1, 0.1, 0)
+
+    plt.figure(figsize=(10, 7))
+    plt.pie(sizes, explode=explode, labels=labels, colors=colours, autopct='%1.1f%%', startangle=140)
+    plt.axis('equal')
+    plt.title(
+        f"Optimal Energy Mix for {user_demand_mwh} MWh Annual Demand\n"
+        f"Total GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh"
+    )
+    plt.savefig(os.path.join('figures', 'optimal_energy_mix_summary.png'))
+    plt.close()
+    print("Saved optimal energy mix summary plot to figures/optimal_energy_mix_summary.png")
+
+
+def run_optimization_workflow(
+    quick_test: bool = False,
+    annual_demand_mwh: Optional[float] = None,
+    available_land_km2: float = 1000,
+) -> Optional[Dict[str, float]]:
+    """Run the complete optimization workflow and return the optimal mix dictionary."""
+    print("Starting optimization script...")
+
+    apply_publication_formatting()
+    ensure_base_directories()
+
+    print(f"Quick test mode: {quick_test}")
+    start_date, end_date = get_analysis_period(quick_test)
+    print(f"Analysis period: {start_date} to {end_date}")
+
+    primary, fallback = load_location_configuration()
+    energy_data, location_name_used, use_synthetic = load_energy_data_with_fallback(
+        primary,
+        fallback,
+        start_date,
+        end_date,
+    )
+
+    if energy_data is None or energy_data.empty:
         print("CRITICAL ERROR: No valid energy data loaded. Cannot proceed with optimization. Exiting.")
-        return # Exit script if data is not valid
+        return None
+
+    print(f"\nData source used for analysis: {location_name_used}{' (synthetic)' if use_synthetic else ' (real NASA POWER)'}")
+    actual_start = energy_data['timestamp'].min().strftime('%Y-%m-%d')
+    actual_end = energy_data['timestamp'].max().strftime('%Y-%m-%d')
+    actual_records = len(energy_data)
+    print(f"Data contains {actual_records} hourly records from {actual_start} to {actual_end}")
+
+    save_data_to_csv(energy_data, "australian_energy_data_potentials.csv")
+    print("Saved energy data to output_data/australian_energy_data_potentials.csv")
+
+    user_demand_mwh = annual_demand_mwh if annual_demand_mwh is not None else prompt_for_annual_demand_mwh()
+    if user_demand_mwh <= 0:
+        print("CRITICAL ERROR: Annual demand must be positive. Exiting.")
+        return None
+
+    print(f"Using target annual demand: {user_demand_mwh} MWh")
+
+    pv_land_per_mw = 0.02
+    wind_land_per_mw = 0.26
+    pv_capacities_dynamic, wind_capacities_dynamic = calculate_dynamic_capacity_ranges(
+        energy_data=energy_data,
+        annual_demand_mwh=user_demand_mwh,
+        available_land_km2=available_land_km2,
+        pv_land_per_mw=pv_land_per_mw,
+        wind_land_per_mw=wind_land_per_mw,
+    )
+
+    print(f"\nOptimizing energy mix for {user_demand_mwh} MWh annual demand with {available_land_km2} km² available land:")
+    print("-" * 80)
+    optimal_mix = optimise_land_use(
+        energy_data,
+        annual_demand_mwh=user_demand_mwh,
+        available_land_km2=available_land_km2,
+        pv_land_per_mw=pv_land_per_mw,
+        wind_land_per_mw=wind_land_per_mw,
+        pv_gwp=0.07,
+        wind_gwp=0.011,
+        grid_gwp=0.6,
+        pv_capacities=pv_capacities_dynamic,
+        wind_capacities=wind_capacities_dynamic,
+    )
+
+    if optimal_mix.get("error"):
+        print(f"Optimization failed: {optimal_mix['error']}")
+        return optimal_mix
+    if optimal_mix['pv_capacity'] < 0 or optimal_mix['wind_capacity'] < 0:
+        print("Optimization did not find a valid positive capacity mix.")
+        return optimal_mix
+
+    plot_optimal_system_profiles(energy_data, optimal_mix)
+    print_optimal_mix_summary(optimal_mix, user_demand_mwh, len(energy_data), available_land_km2)
+    return optimal_mix
+
+
+def main():
+    """Entry point for interactive script execution."""
+    run_optimization_workflow()
 
 def generate_location_data(location_name, latitude, longitude, start_date, end_date):
     """
@@ -1367,7 +1425,7 @@ def generate_location_data(location_name, latitude, longitude, start_date, end_d
             print(f"Successfully obtained NASA POWER data for the site")
             
             # Add PV and wind generation based on the real weather data
-            data = process_real_data(data)
+            data = process_real_data(data, latitude=latitude, longitude=longitude)
             
             # Add location column
             data['location'] = location_name
