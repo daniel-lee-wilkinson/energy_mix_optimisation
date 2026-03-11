@@ -189,15 +189,11 @@ def fetch_nasa_power_data(latitude, longitude, start_date, end_date):
 
 def process_real_data(
     weather_data,
-    pv_capacity=1000,
-    wind_capacity=2000,
     latitude=-28.1083,
     longitude=140.2028,
 ):
     """
     Process real weather data to calculate generation potential per MW.
-    The pv_capacity and wind_capacity arguments are no longer used directly 
-    for calculating output columns but are kept for potential future use or compatibility.
     Latitude/longitude are used to compute solar elevation for day/night masking.
     """
     # Calculate PV generation (kWh)
@@ -412,7 +408,9 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
                        battery_capacity_mwh=120, # Added: Fixed battery capacity in MWh
                        battery_power_mw=90,     # Added: Fixed battery power rating in MW (0.75C of 120 MWh)
                        battery_efficiency=0.90, # Added: Round-trip efficiency (applied on discharge)
-                       battery_min_soc=0.20):  # Added: Minimum state of charge
+                       battery_min_soc=0.20,   # Added: Minimum state of charge
+                       annual_co2_removal_tonnes=5000,
+                       save_artifacts=True):
     """
     Optimises PV and Wind capacity to meet annual demand within land constraints,
     minimising GWP, incorporating fixed battery storage. Also includes
@@ -437,6 +435,8 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
         battery_power_mw (float): Maximum charge/discharge power of the battery in MW.
         battery_efficiency (float): Round-trip efficiency of the battery.
         battery_min_soc (float): Minimum allowed state of charge fraction (e.g., 0.2 for 20%).
+        annual_co2_removal_tonnes (float): Annual atmospheric CO2 removal credited against emissions.
+        save_artifacts (bool): Whether to save output CSVs and generate plots.
 
     Returns:
         dict: Dictionary containing the results of the optimisation.
@@ -447,11 +447,15 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
     print(f"PV Land Use: {pv_land_per_mw} km²/MW, Wind Land Use: {wind_land_per_mw} km²/MW")
     print(f"GWP Factors (kg CO2e/kWh): PV={pv_gwp}, Wind={wind_gwp}, Grid={grid_gwp}")
     print(f"Battery: {battery_capacity_mwh} MWh, {battery_power_mw} MW, {battery_efficiency*100}% eff, {battery_min_soc*100}% min SoC")
+    print(f"Annual CO2 Removal Credit: {annual_co2_removal_tonnes:.2f} tCO2e/yr")
 
-    # Ensure output directories exist
-    os.makedirs(figures_dir, exist_ok=True)
-    os.makedirs(output_data_dir, exist_ok=True)
-    os.makedirs(os.path.join(figures_dir, 'monthly_first_week_profiles'), exist_ok=True)
+    annual_co2_removal_kg = annual_co2_removal_tonnes * 1000
+
+    # Ensure output directories exist only when saving artifacts.
+    if save_artifacts:
+        os.makedirs(figures_dir, exist_ok=True)
+        os.makedirs(output_data_dir, exist_ok=True)
+        os.makedirs(os.path.join(figures_dir, 'monthly_first_week_profiles'), exist_ok=True)
 
     # --- Demand Calculation with Temperature Adjustment ---
     num_hours = len(energy_data)
@@ -479,11 +483,15 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
         'pv_capacity': -1, 
         'wind_capacity': -1, 
         'total_gwp': float('inf'), 
+        'net_gwp': float('inf'),
         'land_used': -1,
         'pv_annual_total': 0,
         'wind_annual_total': 0,
         'grid_annual_total': float('inf'), # Primary objective: minimize this
         'total_annual_generation': 0,
+        'gross_annual_emissions_kgco2e': float('inf'),
+        'net_annual_emissions_kgco2e': float('inf'),
+        'annual_co2_removal_kgco2e': annual_co2_removal_kg,
         'pv_share': 0,
         'wind_share': 0,
         'grid_share': 0,
@@ -640,12 +648,19 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
             if total_generation_annual > 0:
                 # GWP calculation now only includes PV, Wind, and final Grid contributions
                 # Battery GWP could be added (lifecycle) but is omitted here for simplicity
-                overall_gwp_per_kwh = (pv_annual * pv_gwp + wind_annual * wind_gwp + grid_annual * grid_gwp) / total_generation_annual
+                gross_annual_emissions_kgco2e = (pv_annual * pv_gwp + wind_annual * wind_gwp + grid_annual * grid_gwp)
+                overall_gwp_per_kwh = gross_annual_emissions_kgco2e / total_generation_annual
+                net_annual_emissions_kgco2e = gross_annual_emissions_kgco2e - annual_co2_removal_kg
+                net_gwp_per_kwh = net_annual_emissions_kgco2e / total_generation_annual
             else:
                 overall_gwp_per_kwh = float('inf') # Avoid division by zero
+                gross_annual_emissions_kgco2e = float('inf')
+                net_annual_emissions_kgco2e = float('inf')
+                net_gwp_per_kwh = float('inf')
             if verbose_print: 
                 print(f"  Annual Totals (kWh): PV={pv_annual:.0f}, Wind={wind_annual:.0f}, Grid={grid_annual:.0f}, Bat Discharge={battery_discharge_annual:.0f}, Curtailment={total_curtailment_annual:.0f}")
-                print(f"  Average GWP: {overall_gwp_per_kwh:.4f} kg CO2e/kWh")
+                print(f"  Average Gross GWP: {overall_gwp_per_kwh:.4f} kg CO2e/kWh")
+                print(f"  Average Net GWP: {net_gwp_per_kwh:.4f} kg CO2e/kWh")
                 print(f"  Estimated Battery Cycles: {estimated_cycles:.1f}")
 
             # --- Comparison Logic: Minimize overall_gwp_per_kwh --- 
@@ -676,6 +691,10 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
                 best_mix['wind_annual_total'] = wind_annual
                 # Grid annual total already updated
                 best_mix['total_annual_generation'] = total_generation_annual
+                best_mix['gross_annual_emissions_kgco2e'] = gross_annual_emissions_kgco2e
+                best_mix['net_annual_emissions_kgco2e'] = net_annual_emissions_kgco2e
+                best_mix['net_gwp'] = net_gwp_per_kwh
+                best_mix['annual_co2_removal_kgco2e'] = annual_co2_removal_kg
                 
                 # Store hourly profiles for the best mix found so far
                 best_mix['pv_hourly'] = pv_hourly.copy()
@@ -700,7 +719,10 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
     print(f"Optimal PV Capacity: {best_mix['pv_capacity']:.2f} MW")
     print(f"Optimal Wind Capacity: {best_mix['wind_capacity']:.2f} MW")
     print(f"Total Land Used: {best_mix['land_used']:.2f} km² (PV: {best_mix['pv_land']:.2f} km², Wind: {best_mix['wind_land']:.2f} km²)")
-    print(f"Minimum Overall GWP: {best_mix['total_gwp']:.4f} kg CO2e/kWh")
+    print(f"Minimum Gross GWP: {best_mix['total_gwp']:.4f} kg CO2e/kWh")
+    print(f"Net GWP after {annual_co2_removal_tonnes:.2f} tCO2e/yr removal: {best_mix['net_gwp']:.4f} kg CO2e/kWh")
+    print(f"Gross annual emissions: {best_mix['gross_annual_emissions_kgco2e']:.2f} kg CO2e")
+    print(f"Net annual emissions: {best_mix['net_annual_emissions_kgco2e']:.2f} kg CO2e")
     print(f"Total Annual Generation: {best_mix['total_annual_generation']/1000:.2f} MWh")
     print(f"  PV Contribution: {best_mix['pv_annual_total']/1000:.2f} MWh")
     print(f"  Wind Contribution: {best_mix['wind_annual_total']/1000:.2f} MWh")
@@ -759,6 +781,18 @@ def optimise_land_use(energy_data, annual_demand_mwh, available_land_km2,
         (optimal_supply_profile['wind_generation'] * wind_gwp) + 
         (optimal_supply_profile['grid_required'] * grid_gwp)
     ) / hourly_supply_sum.replace(0, np.nan) # Avoid division by zero
+
+    if not save_artifacts:
+        # Skip file and figure generation for batch analyses.
+        best_mix.pop('pv_hourly', None)
+        best_mix.pop('wind_hourly', None)
+        best_mix.pop('grid_hourly', None)
+        best_mix.pop('demand_hourly', None)
+        best_mix.pop('battery_soc_hourly', None)
+        best_mix.pop('battery_charge_hourly', None)
+        best_mix.pop('battery_discharge_hourly', None)
+        best_mix.pop('curtailment_hourly', None)
+        return best_mix
 
     
     # --- Data Saving ---
@@ -1109,6 +1143,30 @@ def _get_env_float(var_name: str, default: str) -> float:
         return float(default)
 
 
+def _get_env_optional_float(var_name: str) -> Optional[float]:
+    """Parse an optional float from an environment variable."""
+    value = os.getenv(var_name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        print(f"Warning: Invalid {var_name} environment variable. Ignoring override.")
+        return None
+
+
+def _get_env_optional_int(var_name: str) -> Optional[int]:
+    """Parse an optional int from an environment variable."""
+    value = os.getenv(var_name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        print(f"Warning: Invalid {var_name} environment variable. Ignoring override.")
+        return None
+
+
 def load_location_configuration() -> Tuple[Dict[str, float], Dict[str, float]]:
     """Load primary and fallback locations from environment variables."""
     print("\nLoading location configuration from environment variables...")
@@ -1199,6 +1257,10 @@ def calculate_dynamic_capacity_ranges(
     available_land_km2: float,
     pv_land_per_mw: float,
     wind_land_per_mw: float,
+    pv_min_mw: float = 0,
+    pv_max_mw: Optional[float] = None,
+    wind_min_mw: float = 0,
+    wind_max_mw: Optional[float] = None,
     min_search_range_mw: float = 50,
     demand_headroom_factor: float = 1.5,
     num_capacity_steps: int = 30,
@@ -1229,17 +1291,33 @@ def calculate_dynamic_capacity_ranges(
             min(max_wind_from_land, demand_headroom_factor * estimated_wind_cap_for_demand),
         )
 
-        print(f"  Using dynamic search upper bounds: PV={pv_search_upper_bound:.1f} MW, Wind={wind_search_upper_bound:.1f} MW")
+        if num_capacity_steps < 2:
+            print("Warning: CAPACITY_STEPS must be >= 2. Using 2 steps.")
+            num_capacity_steps = 2
+
+        final_pv_min = max(0, pv_min_mw)
+        final_wind_min = max(0, wind_min_mw)
+        final_pv_max = pv_search_upper_bound if pv_max_mw is None else pv_max_mw
+        final_wind_max = wind_search_upper_bound if wind_max_mw is None else wind_max_mw
+
+        if final_pv_max < final_pv_min:
+            print(f"Warning: PV max ({final_pv_max}) < PV min ({final_pv_min}). Using dynamic PV max {pv_search_upper_bound:.1f} MW.")
+            final_pv_max = pv_search_upper_bound
+        if final_wind_max < final_wind_min:
+            print(f"Warning: Wind max ({final_wind_max}) < Wind min ({final_wind_min}). Using dynamic Wind max {wind_search_upper_bound:.1f} MW.")
+            final_wind_max = wind_search_upper_bound
+
+        print(f"  Using capacity search bounds: PV={final_pv_min:.1f}..{final_pv_max:.1f} MW, Wind={final_wind_min:.1f}..{final_wind_max:.1f} MW")
         return (
-            np.linspace(0, pv_search_upper_bound, num_capacity_steps),
-            np.linspace(0, wind_search_upper_bound, num_capacity_steps),
+            np.linspace(final_pv_min, final_pv_max, num_capacity_steps),
+            np.linspace(final_wind_min, final_wind_max, num_capacity_steps),
         )
 
     print("Error: Required columns 'pv_potential_per_mw' or 'wind_potential_per_mw' not found in data.")
     print("Using default capacity search ranges.")
     return (
-        np.linspace(0, 500, num_capacity_steps),
-        np.linspace(0, 200, num_capacity_steps),
+        np.linspace(max(0, pv_min_mw), 500 if pv_max_mw is None else max(0, pv_max_mw), max(2, num_capacity_steps)),
+        np.linspace(max(0, wind_min_mw), 200 if wind_max_mw is None else max(0, wind_max_mw), max(2, num_capacity_steps)),
     )
 
 
@@ -1294,7 +1372,12 @@ def print_optimal_mix_summary(
     print(f"Wind generation: {optimal_mix['wind_annual_total']/1000:.2f} MWh/year ({optimal_mix['wind_share']:.1f}%)")
     print(f"Grid usage: {optimal_mix['grid_annual_total']/1000:.2f} MWh/year ({optimal_mix['grid_share']:.1f}%)")
     print(f"Total annual generation: {optimal_mix['total_annual_generation']/1000:.2f} MWh/year")
-    print(f"\nGlobal Warming Potential: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
+    print(f"\nGross GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh")
+    if 'net_gwp' in optimal_mix:
+        removed_tonnes = optimal_mix.get('annual_co2_removal_kgco2e', 0) / 1000
+        print(f"Net GWP (after {removed_tonnes:.2f} tCO2e/yr removal): {optimal_mix['net_gwp']:.4f} kg CO2e/kWh")
+        print(f"Gross annual emissions: {optimal_mix.get('gross_annual_emissions_kgco2e', float('nan')):.2f} kg CO2e")
+        print(f"Net annual emissions: {optimal_mix.get('net_annual_emissions_kgco2e', float('nan')):.2f} kg CO2e")
     print("\nStability analysis:")
     print(f"Hours with renewable generation deficit: {optimal_mix['grid_deficit_hours']} of {total_hours} ({optimal_mix['grid_deficit_percentage']:.1f}%)")
     print(f"Maximum hourly deficit: {optimal_mix['max_hourly_deficit']:.2f} kWh")
@@ -1319,7 +1402,7 @@ def print_optimal_mix_summary(
     plt.axis('equal')
     plt.title(
         f"Optimal Energy Mix for {user_demand_mwh} MWh Annual Demand\n"
-        f"Total GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh"
+        f"Gross GWP: {optimal_mix['total_gwp']:.4f} kg CO2e/kWh"
     )
     plt.savefig(os.path.join('figures', 'optimal_energy_mix_summary.png'))
     plt.close()
@@ -1330,6 +1413,12 @@ def run_optimization_workflow(
     quick_test: bool = False,
     annual_demand_mwh: Optional[float] = None,
     available_land_km2: float = 1000,
+    annual_co2_removal_tonnes: Optional[float] = None,
+    pv_min_mw: Optional[float] = None,
+    pv_max_mw: Optional[float] = None,
+    wind_min_mw: Optional[float] = None,
+    wind_max_mw: Optional[float] = None,
+    capacity_steps: Optional[int] = None,
 ) -> Optional[Dict[str, float]]:
     """Run the complete optimization workflow and return the optimal mix dictionary."""
     print("Starting optimization script...")
@@ -1371,12 +1460,39 @@ def run_optimization_workflow(
 
     pv_land_per_mw = 0.02
     wind_land_per_mw = 0.26
+
+    # Allow user overrides through function arguments or environment variables.
+    env_pv_min = _get_env_optional_float("PV_CAPACITY_MIN_MW")
+    env_pv_max = _get_env_optional_float("PV_CAPACITY_MAX_MW")
+    env_wind_min = _get_env_optional_float("WIND_CAPACITY_MIN_MW")
+    env_wind_max = _get_env_optional_float("WIND_CAPACITY_MAX_MW")
+    env_capacity_steps = _get_env_optional_int("CAPACITY_STEPS")
+
+    effective_pv_min = pv_min_mw if pv_min_mw is not None else (env_pv_min if env_pv_min is not None else 0.0)
+    effective_pv_max = pv_max_mw if pv_max_mw is not None else env_pv_max
+    effective_wind_min = wind_min_mw if wind_min_mw is not None else (env_wind_min if env_wind_min is not None else 0.0)
+    effective_wind_max = wind_max_mw if wind_max_mw is not None else env_wind_max
+    effective_capacity_steps = capacity_steps if capacity_steps is not None else (env_capacity_steps if env_capacity_steps is not None else 30)
+    env_annual_co2_removal_tonnes = _get_env_optional_float("ANNUAL_CO2_REMOVAL_TONNES")
+    effective_annual_co2_removal_tonnes = (
+        annual_co2_removal_tonnes
+        if annual_co2_removal_tonnes is not None
+        else (env_annual_co2_removal_tonnes if env_annual_co2_removal_tonnes is not None else 5000.0)
+    )
+
+    print(f"Using annual CO2 removal credit: {effective_annual_co2_removal_tonnes:.2f} tCO2e/yr")
+
     pv_capacities_dynamic, wind_capacities_dynamic = calculate_dynamic_capacity_ranges(
         energy_data=energy_data,
         annual_demand_mwh=user_demand_mwh,
         available_land_km2=available_land_km2,
         pv_land_per_mw=pv_land_per_mw,
         wind_land_per_mw=wind_land_per_mw,
+        pv_min_mw=effective_pv_min,
+        pv_max_mw=effective_pv_max,
+        wind_min_mw=effective_wind_min,
+        wind_max_mw=effective_wind_max,
+        num_capacity_steps=effective_capacity_steps,
     )
 
     print(f"\nOptimizing energy mix for {user_demand_mwh} MWh annual demand with {available_land_km2} km² available land:")
@@ -1390,6 +1506,7 @@ def run_optimization_workflow(
         pv_gwp=0.07,
         wind_gwp=0.011,
         grid_gwp=0.6,
+        annual_co2_removal_tonnes=effective_annual_co2_removal_tonnes,
         pv_capacities=pv_capacities_dynamic,
         wind_capacities=wind_capacities_dynamic,
     )

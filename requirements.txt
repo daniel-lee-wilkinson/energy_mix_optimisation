@@ -5,3 +5,4 @@ matplotlib>=3.4.0
 pytz>=2021.1
 requests>=2.25.1
 python-dotenv>=1.0.0
+python-pptx>=1.0.2
