@@ -100,3 +100,6 @@ location_config.yaml
 *.cache
 *cache*/
 *raw_data*
+
+# Public release snapshot repo (managed separately)
+public_release_snapshot/

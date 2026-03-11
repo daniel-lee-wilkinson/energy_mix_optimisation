@@ -13,6 +13,13 @@ import traceback
 from typing import Dict, Optional, Tuple
 
 
+# Anonymous, non-site-specific fallback coordinates used when env vars are unset.
+DEFAULT_PRIMARY_LATITUDE = -25.0000
+DEFAULT_PRIMARY_LONGITUDE = 133.0000
+DEFAULT_FALLBACK_LATITUDE = -24.5000
+DEFAULT_FALLBACK_LONGITUDE = 132.5000
+
+
 def _normalise_pandas_frequency(freq: str, default: str = '1h') -> str:
     """Normalize frequency aliases for current pandas versions (e.g., H -> h)."""
     if not isinstance(freq, str) or not freq.strip():
@@ -189,8 +196,8 @@ def fetch_nasa_power_data(latitude, longitude, start_date, end_date):
 
 def process_real_data(
     weather_data,
-    latitude=-28.1083,
-    longitude=140.2028,
+    latitude=DEFAULT_PRIMARY_LATITUDE,
+    longitude=DEFAULT_PRIMARY_LONGITUDE,
 ):
     """
     Process real weather data to calculate generation potential per MW.
@@ -281,7 +288,7 @@ def process_real_data(
     
     return weather_data
 
-def generate_moomba_data(
+def generate_location_data(
     start_date,
     end_date,
     resolution='1h',
@@ -292,23 +299,22 @@ def generate_moomba_data(
     """
     Generate weather and generation data.
 
-    Legacy note: despite the function name, this now supports any location.
     If latitude/longitude are not supplied, PRIMARY_LATITUDE/PRIMARY_LONGITUDE
     from the environment are used, falling back to built-in defaults.
     """
     if latitude is None:
         try:
-            latitude = float(os.getenv("PRIMARY_LATITUDE", "-28.1083"))
+            latitude = float(os.getenv("PRIMARY_LATITUDE", str(DEFAULT_PRIMARY_LATITUDE)))
         except ValueError:
-            print("Warning: Invalid PRIMARY_LATITUDE. Using default -28.1083")
-            latitude = -28.1083
+            print(f"Warning: Invalid PRIMARY_LATITUDE. Using default {DEFAULT_PRIMARY_LATITUDE}")
+            latitude = DEFAULT_PRIMARY_LATITUDE
 
     if longitude is None:
         try:
-            longitude = float(os.getenv("PRIMARY_LONGITUDE", "140.2028"))
+            longitude = float(os.getenv("PRIMARY_LONGITUDE", str(DEFAULT_PRIMARY_LONGITUDE)))
         except ValueError:
-            print("Warning: Invalid PRIMARY_LONGITUDE. Using default 140.2028")
-            longitude = 140.2028
+            print(f"Warning: Invalid PRIMARY_LONGITUDE. Using default {DEFAULT_PRIMARY_LONGITUDE}")
+            longitude = DEFAULT_PRIMARY_LONGITUDE
     
     if use_real_data:
         # Fetch real data from NASA POWER
@@ -1127,11 +1133,46 @@ def ensure_base_directories(figures_dir: str = 'figures', data_dir: str = 'outpu
     os.makedirs(monthly_profiles_dir, exist_ok=True)
 
 
+def _get_env_date_or_default(var_name: str, default_value: str) -> str:
+    """Read a YYYY-MM-DD date string from env vars with validation and fallback."""
+    value = os.getenv(var_name)
+    if value is None or value.strip() == "":
+        return default_value
+
+    candidate = value.strip()
+    try:
+        datetime.strptime(candidate, '%Y-%m-%d')
+        return candidate
+    except ValueError:
+        print(f"Warning: Invalid {var_name} date '{candidate}'. Expected YYYY-MM-DD. Using default {default_value}.")
+        return default_value
+
+
 def get_analysis_period(quick_test: bool) -> Tuple[str, str]:
-    """Return start and end dates for either quick test mode or full-year mode."""
+    """Return start and end dates for either quick test mode or full-year mode.
+
+    Environment overrides:
+      - Full run: ANALYSIS_START_DATE / ANALYSIS_END_DATE
+      - Quick test: QUICK_TEST_START_DATE / QUICK_TEST_END_DATE
+    """
     if quick_test:
-        return '2023-01-01', '2023-01-07'
-    return '2023-01-01', '2023-12-31'
+        default_start, default_end = '2023-01-01', '2023-01-07'
+        start_var, end_var = 'QUICK_TEST_START_DATE', 'QUICK_TEST_END_DATE'
+    else:
+        default_start, default_end = '2023-01-01', '2023-12-31'
+        start_var, end_var = 'ANALYSIS_START_DATE', 'ANALYSIS_END_DATE'
+
+    start_date = _get_env_date_or_default(start_var, default_start)
+    end_date = _get_env_date_or_default(end_var, default_end)
+
+    if datetime.strptime(end_date, '%Y-%m-%d') < datetime.strptime(start_date, '%Y-%m-%d'):
+        print(
+            f"Warning: {end_var} ({end_date}) is earlier than {start_var} ({start_date}). "
+            f"Using defaults {default_start} to {default_end}."
+        )
+        return default_start, default_end
+
+    return start_date, end_date
 
 
 def _get_env_float(var_name: str, default: str) -> float:
@@ -1173,15 +1214,15 @@ def load_location_configuration() -> Tuple[Dict[str, float], Dict[str, float]]:
 
     primary = {
         'name': os.getenv("PRIMARY_LOCATION_NAME", "Primary Location"),
-        'latitude': _get_env_float("PRIMARY_LATITUDE", "-28.1083"),
-        'longitude': _get_env_float("PRIMARY_LONGITUDE", "140.2028"),
+        'latitude': _get_env_float("PRIMARY_LATITUDE", str(DEFAULT_PRIMARY_LATITUDE)),
+        'longitude': _get_env_float("PRIMARY_LONGITUDE", str(DEFAULT_PRIMARY_LONGITUDE)),
     }
     print(f"  Primary Location: '{primary['name']}' ({primary['latitude']}, {primary['longitude']})")
 
     fallback = {
         'name': os.getenv("FALLBACK_LOCATION_NAME", "Fallback Location"),
-        'latitude': _get_env_float("FALLBACK_LATITUDE", "-29.0139"),
-        'longitude': _get_env_float("FALLBACK_LONGITUDE", "134.7544"),
+        'latitude': _get_env_float("FALLBACK_LATITUDE", str(DEFAULT_FALLBACK_LATITUDE)),
+        'longitude': _get_env_float("FALLBACK_LONGITUDE", str(DEFAULT_FALLBACK_LONGITUDE)),
     }
     print(f"  Fallback Location: '{fallback['name']}' ({fallback['latitude']}, {fallback['longitude']})")
 

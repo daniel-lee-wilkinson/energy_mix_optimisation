@@ -72,6 +72,12 @@ The script reads environment variables (via `python-dotenv`) for location config
 * `FALLBACK_LATITUDE`: Latitude of the fallback site
 * `FALLBACK_LONGITUDE`: Longitude of the fallback site
 
+Optional analysis period overrides (`YYYY-MM-DD`):
+* `ANALYSIS_START_DATE`: Start date for full runs (default `2023-01-01`)
+* `ANALYSIS_END_DATE`: End date for full runs (default `2023-12-31`)
+* `QUICK_TEST_START_DATE`: Start date for quick test mode (default `2023-01-01`)
+* `QUICK_TEST_END_DATE`: End date for quick test mode (default `2023-01-07`)
+
 Optional capacity search overrides:
 * `PV_CAPACITY_MIN_MW`: Lower bound for PV capacity search range
 * `PV_CAPACITY_MAX_MW`: Upper bound for PV capacity search range
@@ -84,19 +90,24 @@ You can set these variables in either:
 - your shell environment, or
 - a `.env` file in the project root (auto-loaded if present).
 
-If no environment variables are provided, the script uses default values currently defined in code:
-- Primary default: latitude `-28.1083`, longitude `140.2028`
-- Fallback default: latitude `-29.0139`, longitude `134.7544`
+If no environment variables are provided, the script uses anonymous non-site-specific defaults.
+For public releases, set explicit coordinates in your local `.env` and keep `.env` out of version control.
 
 Example `.env`:
 
 ```env
 PRIMARY_LOCATION_NAME=Primary Site
-PRIMARY_LATITUDE=-28.1083
-PRIMARY_LONGITUDE=140.2028
+PRIMARY_LATITUDE=-XX.XXXX
+PRIMARY_LONGITUDE=XXX.XXXX
 FALLBACK_LOCATION_NAME=Fallback Site
-FALLBACK_LATITUDE=-29.0139
-FALLBACK_LONGITUDE=134.7544
+FALLBACK_LATITUDE=-YY.YYYY
+FALLBACK_LONGITUDE=YYY.YYYY
+
+# Optional: analysis period overrides
+ANALYSIS_START_DATE=2023-01-01
+ANALYSIS_END_DATE=2023-12-31
+# QUICK_TEST_START_DATE=2023-01-01
+# QUICK_TEST_END_DATE=2023-01-07
 
 # Optional: capacity search bounds (MW)
 PV_CAPACITY_MIN_MW=0
@@ -106,6 +117,29 @@ WIND_CAPACITY_MAX_MW=400
 CAPACITY_STEPS=40
 ANNUAL_CO2_REMOVAL_TONNES=5000
 ```
+
+## Public Release Privacy Check
+
+Before publishing publicly, run:
+
+```bash
+./scripts/check_public_release_safety.sh
+```
+
+This check verifies that:
+- local env files are not tracked,
+- generated artifacts in `output_data/` and `figures/` are not tracked,
+- legacy site labels are not present,
+- old hardcoded coordinate defaults are not present.
+
+Important: Git history may still contain older commits. For a strict anonymous public release,
+publish from a clean snapshot with no prior history:
+
+```bash
+./scripts/export_public_release_snapshot.sh
+```
+
+Then initialize a new repository from the exported folder.
 
 ## Overview & Example Scenario
 
