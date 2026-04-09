@@ -118,29 +118,6 @@ CAPACITY_STEPS=40
 ANNUAL_CO2_REMOVAL_TONNES=5000
 ```
 
-## Public Release Privacy Check
-
-Before publishing publicly, run:
-
-```bash
-./scripts/check_public_release_safety.sh
-```
-
-This check verifies that:
-- local env files are not tracked,
-- generated artifacts in `output_data/` and `figures/` are not tracked,
-- legacy site labels are not present,
-- old hardcoded coordinate defaults are not present.
-
-Important: Git history may still contain older commits. For a strict anonymous public release,
-publish from a clean snapshot with no prior history:
-
-```bash
-./scripts/export_public_release_snapshot.sh
-```
-
-Then initialize a new repository from the exported folder.
-
 ## Overview & Example Scenario
 
 The primary script (`run_optimization.py`) simulates an energy system hourly over a year (using NASA POWER data for a remote site in central Australia) to find the mix of PV and Wind capacity that minimizes the overall GWP per kWh supplied. It considers:
